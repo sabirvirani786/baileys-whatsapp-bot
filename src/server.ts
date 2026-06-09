@@ -52,7 +52,7 @@ app.get('/', (req, res) => {
           <div id="qrcode"></div>
           <script>
             if ('${qr}') new QRCode(document.getElementById("qrcode"), { text: '${qr}', width: 256, height: 256 });
-            setTimeout(() => location.reload(), 10000); // Reload to check status
+            ${!sock?.user ? 'setTimeout(() => location.reload(), 10000); // Reload to check status' : ''}
           </script>
         </div>
 
