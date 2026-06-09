@@ -24,6 +24,7 @@ function isDuplicate(msgId: string): boolean {
 }
 
 export async function handleIncomingMessages(m: any) {
+  if (m.type !== 'notify') return;
   const msg = m.messages[0];
   if (!msg || !msg.message) return;
   if (msg.key.fromMe) return;
@@ -52,27 +53,27 @@ export async function handleIncomingMessages(m: any) {
   try {
     let state = userStates.get(jid) || { stage: 'categories' };
 
-    if (['hi', 'hello', 'salam', 'assalamu alaikum'].includes(lowerMsg) || !state.cats) {
-      const sentRecently = await categorySentRecently(jid);
-      if (sentRecently && !['hi', 'hello', 'salam', 'assalamu alaikum'].includes(lowerMsg)) {
-        return; // Don't spam categories if they just sent a random message
-      }
-
-      const cats = await getCombinedCategories();
-      state.cats = cats;
-      state.stage = 'categories';
+    // Restore categories if they are missing (e.g. after a server restart)
+    if (!state.cats) {
+      state.cats = await getCombinedCategories();
       userStates.set(jid, state);
+    }
+
+    const isGreeting = ['hi', 'hello', 'salam', 'assalamu alaikum'].includes(lowerMsg);
+
+    if (isGreeting) {
+      state.stage = 'categories';
       await markCategorySent(jid);
 
       let reply = '🌙 *Welcome to Islamic Tabarrukat!*\n\nReply with a number or name to see products:\n\n';
-      cats.forEach((c, i) => {
+      state.cats.forEach((c, i) => {
         reply += `${i + 1}. ${c.name}\n`;
       });
       await safeSendMessage(jid, { text: reply });
       return;
     }
 
-    if (state.stage === 'categories' && state.cats) {
+    if (state.stage === 'categories') {
       let selectedCat = state.cats.find(c => c.name.toLowerCase() === lowerMsg);
       if (!selectedCat) {
         const num = parseInt(lowerMsg, 10);
@@ -111,10 +112,23 @@ export async function handleIncomingMessages(m: any) {
         }
         await safeSendMessage(jid, { text: 'To see categories again, say "Hi"!' });
         state.stage = 'categories'; // Reset so they can choose another next time easily
-      } else {
-        await safeSendMessage(jid, { text: `Please select a valid category number or name.` });
+        return;
       }
     }
+
+    // If it wasn't a greeting and wasn't a valid category selection, check if we should send categories
+    // Only send if we haven't sent them recently to avoid spam
+    const sentRecently = await categorySentRecently(jid);
+    if (!sentRecently) {
+      state.stage = 'categories';
+      await markCategorySent(jid);
+      let reply = '🌙 *Welcome to Islamic Tabarrukat!*\n\nReply with a number or name to see products:\n\n';
+      state.cats.forEach((c, i) => {
+        reply += `${i + 1}. ${c.name}\n`;
+      });
+      await safeSendMessage(jid, { text: reply });
+    }
+
   } catch (err) {
     console.error(`[messageHandler] error for ${jid}`, err);
   }
