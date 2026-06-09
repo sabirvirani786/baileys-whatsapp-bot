@@ -24,25 +24,56 @@ function isDuplicate(msgId: string): boolean {
 }
 
 export async function handleIncomingMessages(m: any) {
-  if (m.type !== 'notify') return;
+  console.log(`\n[messageHandler] Received event type: ${m.type}`);
+  if (m.type !== 'notify') {
+    console.log(`[messageHandler] Ignored non-notify event: ${m.type}`);
+    return;
+  }
+  
   const msg = m.messages[0];
-  if (!msg || !msg.message) return;
-  if (msg.key.fromMe) return;
+  if (!msg || !msg.message) {
+    console.log(`[messageHandler] Ignored - no message content`);
+    return;
+  }
+  
+  if (msg.key.fromMe) {
+    console.log(`[messageHandler] Ignored - message is from me`);
+    return;
+  }
 
   const jid = msg.key.remoteJid;
-  if (!jid || jid === 'status@broadcast') return;
+  if (!jid || jid === 'status@broadcast') {
+    console.log(`[messageHandler] Ignored - invalid jid or broadcast: ${jid}`);
+    return;
+  }
 
   const msgId = msg.key.id;
-  if (isDuplicate(msgId)) return;
+  if (isDuplicate(msgId)) {
+    console.log(`[messageHandler] Ignored - duplicate message id: ${msgId}`);
+    return;
+  }
 
   const cfg = getConfig().bot;
-  if (cfg.replyOnlyInPrivateChats && jid.endsWith('@g.us')) return;
-  if (!cfg.autoReply) return;
+  if (cfg.replyOnlyInPrivateChats && jid.endsWith('@g.us')) {
+    console.log(`[messageHandler] Ignored - group chat message (replyOnlyInPrivateChats=true)`);
+    return;
+  }
+  
+  if (!cfg.autoReply) {
+    console.log(`[messageHandler] Ignored - autoReply is disabled in config`);
+    return;
+  }
 
   const { text } = extractMessageContent(msg);
   const lowerMsg = text.trim().toLowerCase();
-  if (!lowerMsg) return;
+  
+  console.log(`[messageHandler] Processing valid message from ${jid} - Text: "${text}"`);
+  if (!lowerMsg) {
+    console.log(`[messageHandler] Ignored - empty text content`);
+    return;
+  }
 
+  console.log(`[messageHandler] Sending webhook for message...`);
   sendWebhook('message_received', {
     jid,
     messageId: msgId,

@@ -4,7 +4,10 @@ import { getConfig } from './config.js';
 
 export async function sendWebhook(event: string, payload: any, retries = 3): Promise<boolean> {
   const cfg = getConfig().webhook;
-  if (!cfg?.enabled || !cfg?.url) return false;
+  if (!cfg?.enabled || !cfg?.url) {
+    console.log(`[webhook] Ignored event '${event}' - webhook disabled or no url`);
+    return false;
+  }
 
   const full = { event, timestamp: new Date().toISOString(), data: payload };
   const body = JSON.stringify(full);
@@ -12,6 +15,7 @@ export async function sendWebhook(event: string, payload: any, retries = 3): Pro
     ? crypto.createHmac('sha256', cfg.secret).update(body).digest('hex')
     : '';
 
+  console.log(`[webhook] Sending event '${event}' to ${cfg.url}`);
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
       await axios.post(cfg.url, full, {
