@@ -16,11 +16,13 @@ async function simulateTyping(jid: string, textLength = 10): Promise<void> {
   } catch { /* non-critical */ }
 }
 
-export async function safeSendMessage(jid: string, content: any): Promise<boolean> {
+export async function safeSendMessage(jid: string, content: any, opts?: { typing?: boolean }): Promise<boolean> {
   if (!jid || !content) return false;
   try {
     const text = content.text || '';
-    await simulateTyping(jid, text.length);
+    if (opts?.typing !== false) {
+      await simulateTyping(jid, text.length);
+    }
     await messageQueue.add(jid, content);
     return true;
   } catch (err) {

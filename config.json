@@ -8,7 +8,7 @@
     "typingIndicator": true,
     "typingDelayPerCharMs": 30,
     "maxRepliesPerHour": 25,
-    "maxGlobalMessagesPerHour": 25,
+    "maxGlobalMessagesPerHour": 2000,
     "cooldownAfterBurst": 300,
     "warmupEnabled": true
   },

@@ -13,7 +13,7 @@ import {
   formatProduct,
   formatSet
 } from './scraper.js';
-import { getHadeeyaProducts, storeHadeeyaProduct } from './db.js';
+import { getAllHadeeyaProducts, storeHadeeyaProduct } from './db.js';
 import type { DailyPostState, HadeeyaProduct } from './types.js';
 
 const STATE_FILE = 'data/daily-post-state.json';
@@ -34,8 +34,21 @@ function saveState(state: DailyPostState) {
   }
 }
 
-async function runDailyJob() {
+export async function runDailyJob() {
   console.log('[daily-poster] ===== DAILY POSTER JOB START =====');
+  
+  try {
+    const fs = await import('fs');
+    const path = await import('path');
+    const dir = path.resolve('poster_images');
+    if (fs.existsSync(dir)) {
+      fs.rmSync(dir, { recursive: true, force: true });
+      console.log('[daily-poster] Cleared old poster images.');
+    }
+  } catch (err) {
+    console.log('[daily-poster] Failed to clear images', err);
+  }
+
   const groups = env.DAILY_POST_GROUPS;
   if (!groups.length) {
     console.log('[daily-poster] No target groups configured');
@@ -43,45 +56,42 @@ async function runDailyJob() {
   }
 
   const state = loadState();
+
+  const allHadeeya = getAllHadeeyaProducts();
+  const hadeeyaProducts: HadeeyaProduct[] = [];
+
+  if (allHadeeya.length > 0) {
+    let index = state.hadeeya_index || 0;
+    for (let i = 0; i < 10; i++) {
+      if (index >= allHadeeya.length) index = 0;
+      hadeeyaProducts.push(allHadeeya[index]);
+      index++;
+    }
+    state.hadeeya_index = index;
+  }
+
   const kharchifyProducts = await fetchKharchifyProducts(undefined, 50); // Fetch a batch
   const chunk = kharchifyProducts.slice(state.product_index, state.product_index + 5);
   state.product_index += chunk.length;
   if (state.product_index >= kharchifyProducts.length) state.product_index = 0;
 
-  const sets = await fetchKharchifySets();
-  const setItem = sets[state.set_index % (sets.length || 1)] || null;
-  state.set_index++;
-
-  const hadeeyaProducts = getHadeeyaProducts(8);
-
-  if (!chunk.length && !setItem && !hadeeyaProducts.length) {
+  if (!hadeeyaProducts.length && !chunk.length) {
     console.log('[daily-poster] No products to post');
     return;
   }
 
   for (const jid of groups) {
     try {
-      await safeSendMessage(jid, { text: "Assalamu Alaikum! Today's featured items:" });
-      
+      await safeSendMessage(jid, { text: "Assalamu Alaikum! Today's featured items:" }, { typing: false });
+
       for (const p of chunk) {
         const text = formatProduct(p);
         if (p.image) {
           const imgPath = await downloadImage(p.image, `k_${p.id}`);
-          if (imgPath) await safeSendMessage(jid, { image: { url: imgPath }, caption: text });
-          else await safeSendMessage(jid, { text });
+          if (imgPath) await safeSendMessage(jid, { image: { url: imgPath }, caption: text }, { typing: false });
+          else await safeSendMessage(jid, { text }, { typing: false });
         } else {
-          await safeSendMessage(jid, { text });
-        }
-      }
-
-      if (setItem) {
-        const text = formatSet(setItem);
-        if (setItem.image_url || setItem.product_images?.[0]?.image_url) {
-          const imgPath = await downloadImage(setItem.image_url || setItem.product_images![0].image_url, `set_${setItem.id}`);
-          if (imgPath) await safeSendMessage(jid, { image: { url: imgPath }, caption: text });
-          else await safeSendMessage(jid, { text });
-        } else {
-          await safeSendMessage(jid, { text });
+          await safeSendMessage(jid, { text }, { typing: false });
         }
       }
 
@@ -89,14 +99,14 @@ async function runDailyJob() {
         const text = `📌 *${p.name}*\n💰 Hadia: ₹${p.price_adjusted}\n📦 ${p.stock}`;
         if (p.image_url) {
           const imgPath = await downloadImage(p.image_url, `h_${p.product_id}`);
-          if (imgPath) await safeSendMessage(jid, { image: { url: imgPath }, caption: text });
-          else await safeSendMessage(jid, { text });
+          if (imgPath) await safeSendMessage(jid, { image: { url: imgPath }, caption: text }, { typing: false });
+          else await safeSendMessage(jid, { text }, { typing: false });
         } else {
-          await safeSendMessage(jid, { text });
+          await safeSendMessage(jid, { text }, { typing: false });
         }
       }
 
-      await safeSendMessage(jid, { text: "Reply to order or know more! JazakAllah." });
+      await safeSendMessage(jid, { text: "Reply to order or know more! JazakAllah." }, { typing: false });
       console.log(`[daily-poster] Sent to ${jid}`);
     } catch (err) {
       console.error(`[daily-poster] Failed sending to ${jid}`, err);
@@ -107,14 +117,45 @@ async function runDailyJob() {
   console.log('[daily-poster] ===== DAILY POSTER JOB END =====');
 }
 
-async function scrapeHadeeya() {
+export async function getDailyPostPreview() {
+  const state = loadState();
+  const kharchifyProducts = await fetchKharchifyProducts(undefined, 50);
+  const chunk = kharchifyProducts.slice(state.product_index, state.product_index + 5);
+
+  const allHadeeya = getAllHadeeyaProducts();
+  const hadeeyaProducts: HadeeyaProduct[] = [];
+
+  if (allHadeeya.length > 0) {
+    let index = state.hadeeya_index || 0;
+    for (let i = 0; i < 10; i++) {
+      if (index >= allHadeeya.length) index = 0;
+      hadeeyaProducts.push(allHadeeya[index]);
+      index++;
+    }
+  }
+
+  return {
+    chunk: chunk.map(p => ({
+      id: p.id,
+      text: formatProduct(p),
+      image: p.image
+    })),
+    hadeeyaProducts: hadeeyaProducts.map(p => ({
+      id: p.product_id,
+      text: `📌 *${p.name}*\n💰 Hadia: ₹${p.price_adjusted}\n📦 ${p.stock}`,
+      image: p.image_url
+    }))
+  };
+}
+
+export async function scrapeHadeeya() {
   console.log('[daily-poster] === HADEEYA SCRAPER START ===');
   const cats = await getCombinedCategories();
   const hadeeyaCats = cats.filter(c => c.source === 'hadeeya');
   let stored = 0;
 
   for (const cat of hadeeyaCats) {
-    const products = await fetchHadeeyaProducts(cat.sourceId!, 2);
+    const products = await fetchHadeeyaProducts(cat.sourceId!, 100);
     for (const p of products) {
       if (!p.link) continue;
       const details = await scrapeHadeeyaProductPage(p.link);
@@ -145,4 +186,28 @@ export function initScheduler() {
   console.log(`[daily-poster] Scheduled daily poster at ${postH}:${postM.toString().padStart(2, '0')}`);
   cron.schedule(`${postM} ${postH} * * *`, runDailyJob);
   cron.schedule('0 6 * * *', scrapeHadeeya);
+
+  // Clean up poster_images every 15 minutes (only files older than 15 mins)
+  setInterval(async () => {
+    try {
+      const fs = await import('fs');
+      const path = await import('path');
+      const dir = path.resolve('poster_images');
+      if (!fs.existsSync(dir)) return;
+      const files = fs.readdirSync(dir);
+      const now = Date.now();
+      let deleted = 0;
+      for (const file of files) {
+        const filePath = path.join(dir, file);
+        const stats = fs.statSync(filePath);
+        if (now - stats.mtimeMs > 15 * 60 * 1000) {
+          fs.unlinkSync(filePath);
+          deleted++;
+        }
+      }
+      if (deleted > 0) console.log(`[cleanup] Deleted ${deleted} old photos from poster_images.`);
+    } catch (err) {
+      // ignore
+    }
+  }, 15 * 60 * 1000);
 }

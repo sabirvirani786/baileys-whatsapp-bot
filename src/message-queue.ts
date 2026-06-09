@@ -13,6 +13,7 @@ class MessageQueue {
   private lastSendTime = 0;
   private msgCount = 0;
   private hourlyReset = Date.now();
+  private lastJid: string | null = null;
 
   async add(jid: string, content: any): Promise<void> {
     this.queue.push({ jid, content, timestamp: Date.now() });
@@ -38,12 +39,38 @@ class MessageQueue {
       }
 
       const item = this.queue.shift()!;
-      const gap = now - this.lastSendTime;
-      if (gap < 1200) await delay(1200 - gap);
+      let gap = Date.now() - this.lastSendTime;
+      
+      // If we are switching to a new chat/group, add a 10 second cooldown
+      // to reset WhatsApp's anti-spam media burst limit.
+      if (this.lastJid && this.lastJid !== item.jid) {
+        console.log(`[queue] Switching from ${this.lastJid} to ${item.jid}. Cooldown 10s...`);
+        if (gap < 10000) await delay(10000 - gap);
+        gap = Date.now() - this.lastSendTime;
+      }
+      this.lastJid = item.jid;
+
+      // Default gap between messages is 5000ms
+      if (gap < 5000) await delay(5000 - gap);
 
       const sock = getSocket();
       if (sock) {
+        console.log(`[queue] Sending message to ${item.jid}...`);
+        
+        // Convert local file URL to buffer for safety
+        if (item.content?.image?.url) {
+          try {
+            const fs = await import('fs');
+            if (fs.existsSync(item.content.image.url)) {
+              item.content.image = fs.readFileSync(item.content.image.url);
+            }
+          } catch (err) {
+            console.error('[queue] Failed to read image buffer', err);
+          }
+        }
+
         await sock.sendMessage(item.jid, item.content);
+        console.log(`[queue] Successfully sent message to ${item.jid}`);
         this.lastSendTime = Date.now();
         this.msgCount++;
       }
@@ -51,7 +78,7 @@ class MessageQueue {
       console.error('[queue] send error', err);
     } finally {
       this.processing = false;
-      if (this.queue.length) setTimeout(() => this.process(), 800);
+      if (this.queue.length) setTimeout(() => this.process(), 1500);
     }
   }
 

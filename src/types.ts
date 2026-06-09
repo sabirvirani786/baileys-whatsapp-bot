@@ -55,6 +55,7 @@ export interface DailyPostState {
   product_page: number;
   product_index: number;
   set_index: number;
+  hadeeya_index?: number;
 }
 
 export interface BotConfig {

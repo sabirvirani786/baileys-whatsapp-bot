@@ -69,8 +69,18 @@ export function storeHadeeyaProduct(product: HadeeyaProduct): void {
   writeJson(HADEEYA_FILE, products);
 }
 
-export function getHadeeyaProducts(limit = 20): HadeeyaProduct[] {
+export function getAllHadeeyaProducts(): HadeeyaProduct[] {
   const products = readJson<HadeeyaProduct[]>(HADEEYA_FILE, []);
-  products.sort((a, b) => (b.scraped_at ?? '').localeCompare(a.scraped_at ?? ''));
-  return products.slice(0, limit);
+  products.sort((a, b) => a.product_id - b.product_id); // Sort by ID so order is stable
+  return products;
+}
+
+export function clearHadeeyaProducts(): void {
+  writeJson(HADEEYA_FILE, []);
+}
+
+export function deleteHadeeyaProduct(productId: number | string): void {
+  const products = readJson<HadeeyaProduct[]>(HADEEYA_FILE, []);
+  const filtered = products.filter(p => String(p.product_id) !== String(productId));
+  writeJson(HADEEYA_FILE, filtered);
 }

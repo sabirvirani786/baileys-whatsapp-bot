@@ -1,59 +1,4 @@
-import express from 'express';
-import axios from 'axios';
-import * as cheerio from 'cheerio';
-import { getCurrentQR, getSocket } from './connection.js';
-import { getConfig } from './config.js';
-import { fetchHadeeyaCategories, scrapeHadeeyaProductPage, getCombinedCategories } from './scraper.js';
-import { getDailyPostPreview } from './daily-poster.js';
-import { deleteHadeeyaProduct, clearHadeeyaProducts } from './db.js';
-import { handleIncomingMessages, sendCategoryProducts } from './message-handler.js';
 
-const HADEEYA_API = 'https://hadeeya.in/wp-json/wp/v2';
-const HADEEYA_MARKUP = 0.20;
-
-const app = express();
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
-
-app.get('/', (req, res) => {
-  const qr = getCurrentQR();
-  const sock = getSocket();
-  const state = sock?.user ? 'Connected as ' + sock.user.id : (qr ? 'Awaiting Scan' : 'Initializing...');
-
-  res.send(`
-    <!DOCTYPE html>
-    <html lang="en">
-    <head>
-      <meta charset="UTF-8">
-      <title>WhatsApp Bot Dashboard</title>
-      <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <style>
-        body { font-family: -apple-system, system-ui, sans-serif; background: #f0f2f5; color: #1c1e21; margin: 0; padding: 20px; }
-        .container { max-width: 600px; margin: 0 auto; background: white; padding: 30px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
-        h1 { margin-top: 0; color: #00a884; }
-        .status { padding: 10px; border-radius: 4px; margin-bottom: 20px; font-weight: bold; }
-        .connected { background: #d4edda; color: #155724; }
-        .disconnected { background: #fff3cd; color: #856404; }
-        #qr-container { display: ${qr && !sock?.user ? 'block' : 'none'}; margin: 20px 0; text-align: center; }
-        .input-group { margin-bottom: 15px; }
-        label { display: block; margin-bottom: 5px; font-weight: 500; }
-        input, textarea, button { width: 100%; box-sizing: border-box; padding: 10px; border: 1px solid #ddd; border-radius: 4px; font-size: 16px; }
-        textarea { height: 100px; resize: vertical; }
-        button { background: #00a884; color: white; border: none; font-weight: bold; cursor: pointer; margin-top: 10px; }
-        button:hover { background: #008f6f; }
-        .help { font-size: 12px; color: #666; margin-top: 5px; }
-      </style>
-      <script src="https://cdn.rawgit.com/davidshimjs/qrcodejs/gh-pages/qrcode.min.js"></script>
-    </head>
-    <body>
-      <div class="container">
-        <h1>WhatsApp Bot Dashboard</h1>
-        <div class="status ${sock?.user ? 'connected' : 'disconnected'}">Status: ${state}</div>
-        
-        <div id="qr-container">
-          <p>Scan this QR code with WhatsApp:</p>
-          <div id="qrcode"></div>
-          <script>
             if ('${qr}') new QRCode(document.getElementById("qrcode"), { text: '${qr}', width: 256, height: 256 });
             ${!sock?.user ? 'setTimeout(() => location.reload(), 10000); // Reload to check status' : ''}
           </script>
@@ -111,7 +56,7 @@ app.get('/api/scraper/search', async (req, res) => {
   try {
     // We use fetchHadeeyaProducts because it now deep-scrapes the prices too!
     const { fetchHadeeyaProducts } = await import('./scraper.js');
-    const products = await fetchHadeeyaProducts(keyword, 100);
+    const products = await fetchHadeeyaProducts(keyword, 10);
     res.json({ success: true, data: products });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
@@ -254,26 +199,6 @@ app.get('/api/groups', async (_req, res) => {
       participants: g.participants?.length || 0
     }));
     res.json({ success: true, data: groupList });
-  } catch (err: any) {
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-app.post('/api/test/scrape-hadeeya', async (_req, res) => {
-  try {
-    const { scrapeHadeeya } = await import('./daily-poster.js');
-    await scrapeHadeeya();
-    res.json({ success: true });
-  } catch (err: any) {
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-app.post('/api/test/daily-post-now', async (_req, res) => {
-  try {
-    const { runDailyJob } = await import('./daily-poster.js');
-    await runDailyJob();
-    res.json({ success: true });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
   }
@@ -477,7 +402,7 @@ previewBtn.addEventListener('click', async () => {
     statusMsg.style.display = 'none';
     sendBtn.style.display = 'block';
     
-    let bubblesHtml = '<div style="background: #e1f5fe; padding: 8px 12px; border-radius: 8px; align-self: flex-start; max-width: 80%; font-size: 14px; box-shadow: 0 1px 1px rgba(0,0,0,0.1);">🔍 Loaded ' + j.data.length + ' products for *' + catName + '*!</div>';
+    let bubblesHtml = '<div style="background: #e1f5fe; padding: 8px 12px; border-radius: 8px; align-self: flex-start; max-width: 80%; font-size: 14px; box-shadow: 0 1px 1px rgba(0,0,0,0.1);">🔍 Loading products for *' + catName + '*...</div>';
     
     j.data.forEach(p => {
       bubblesHtml += '<div style="background: white; padding: 4px; border-radius: 8px; align-self: flex-start; max-width: 85%; font-size: 14px; box-shadow: 0 1px 1px rgba(0,0,0,0.1);">';
@@ -589,8 +514,6 @@ app.get('/dashboard', (_req, res) => {
   <div class="panel active" id="panel-daily">
     <div class="input-row">
       <button id="load-daily-btn">Preview Today's Daily Post</button>
-      <button id="post-daily-btn" style="background:#28a745;">Post Now</button>
-      <button id="scrape-daily-btn" style="background:#17a2b8;">Scrape Now (Fill Queue)</button>
       <button id="clear-hadeeya-btn" class="danger">Clear Hadeeya Queue</button>
     </div>
     <div id="daily-results"></div>
@@ -679,6 +602,15 @@ document.getElementById('load-daily-btn').addEventListener('click', async () => 
     html += '</div></div>';
   }
 
+  // Kharchify Set
+  if (d.setItem) {
+    html += '<div class="post-section"><h3>Kharchify Featured Set</h3><div class="products-grid">';
+    html += '<div class="product-card" style="grid-column: span 2">';
+    if (d.setItem.image) html += '<img style="height:300px" src="'+d.setItem.image+'">';
+    html += '<div class="info">'+d.setItem.text+'</div></div>';
+    html += '</div></div>';
+  }
+
   // Hadeeya Products
   if (d.hadeeyaProducts && d.hadeeyaProducts.length) {
     html += '<div class="post-section"><h3>Hadeeya Scraped Queue</h3><div class="products-grid">';
@@ -708,27 +640,6 @@ document.getElementById('clear-hadeeya-btn').addEventListener('click', async () 
   }
 });
 
-document.getElementById('scrape-daily-btn').addEventListener('click', async () => {
-  document.getElementById('daily-results').innerHTML = '<div class="loading">Scraping Hadeeya... This may take up to a minute!</div>';
-  const j = await req('/api/test/scrape-hadeeya', { method: 'POST' });
-  if (j.success) {
-    document.getElementById('load-daily-btn').click();
-  } else {
-    document.getElementById('daily-results').innerHTML = '<div class="error">'+j.error+'</div>';
-  }
-});
-
-document.getElementById('post-daily-btn').addEventListener('click', async () => {
-  if (!confirm("Are you sure you want to SEND the daily post to all configured groups RIGHT NOW?")) return;
-  document.getElementById('daily-results').innerHTML = '<div class="loading">Sending daily post... Check your WhatsApp!</div>';
-  const j = await req('/api/test/daily-post-now', { method: 'POST' });
-  if (j.success) {
-    document.getElementById('daily-results').innerHTML = '<div class="success">Daily post sent successfully!</div>';
-  } else {
-    document.getElementById('daily-results').innerHTML = '<div class="error">'+j.error+'</div>';
-  }
-});
-
 // --- Category Scraper ---
 const catSelect = document.getElementById('cat-select');
 const catResults = document.getElementById('cat-results');
@@ -746,7 +657,7 @@ document.getElementById('cat-btn').addEventListener('click', async () => {
   const j = await req('/api/scraper/search?cat=' + encodeURIComponent(catSelect.value));
   if (!j.success) return catResults.innerHTML = '<div class="error">'+j.error+'</div>';
   
-  let html = '<div style="margin-bottom:15px; padding: 10px; background: #e1f5fe; border-radius: 8px; font-weight:bold;">🔍 Loaded ' + j.data.length + ' products for this category!</div><div class="products-grid">';
+  let html = '<div class="products-grid">';
   j.data.forEach(p => {
     html += '<div class="product-card">';
     if (p.image) html += '<img src="'+p.image+'">';
@@ -820,7 +731,7 @@ document.getElementById('ds-preview-btn').addEventListener('click', async () => 
   dsWhatsappPreview.style.display = 'block';
   dsSendBtn.style.display = 'inline-block';
   
-  let bubblesHtml = '<div style="background: #e1f5fe; padding: 8px 12px; border-radius: 8px; align-self: flex-start; max-width: 80%; font-size: 14px;">🔍 Loaded ' + j.data.length + ' products for *' + catName + '*!</div>';
+  let bubblesHtml = '<div style="background: #e1f5fe; padding: 8px 12px; border-radius: 8px; align-self: flex-start; max-width: 80%; font-size: 14px;">🔍 Loading products for *' + catName + '*...</div>';
   
   j.data.forEach(p => {
     bubblesHtml += '<div style="background: white; padding: 4px; border-radius: 8px; align-self: flex-start; max-width: 85%; font-size: 14px; box-shadow: 0 1px 1px rgba(0,0,0,0.1);">';
@@ -871,20 +782,3 @@ dsSendBtn.addEventListener('click', async () => {
 });
 
 
-</script>
-</body>
-</html>
-  `);
-});
-
-// ── Health Check ──────────────────────────────────────────────────────────
-app.get('/health', (_req, res) => {
-  res.send('ok');
-});
-
-export function startServer() {
-  const port = process.env.PORT || 3000;
-  app.listen(port, () => {
-    console.log(`[server] Dashboard running on port ${port}`);
-  });
-}

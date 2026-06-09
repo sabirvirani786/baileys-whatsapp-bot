@@ -68,30 +68,64 @@ export async function fetchHadeeyaCategories(): Promise<Category[]> {
   }
 }
 
-export async function fetchHadeeyaProducts(catId: string | number, limit = 15): Promise<Product[]> {
+const HADEEYA_STATIC_CATEGORIES = [
+  { name: "Velvet Banner", id: 32 },
+  { name: "Cotton Banners", id: 33 },
+  { name: "roll pati", id: 85 },
+  { name: "AZA CURTAINS", id: 123 },
+  { name: "JHALAR", id: 103 },
+  { name: "METAL ART", id: 19 },
+  { name: "WALL MURALS", id: 16 },
+  { name: "Tasbeeh", id: 68 },
+  { name: "SYRIAN TUGRA", id: 76 },
+];
+
+export async function fetchHadeeyaProducts(keyword: string | number, limit = 5): Promise<Product[]> {
   try {
-    const { data } = await axios.get(`${HADEEYA_API}/product`, {
-      params: { per_page: limit, product_cat: catId, _fields: 'id,title,link,featured_media,excerpt' },
-    });
-    const products: Product[] = [];
-    for (const p of data) {
-      let image = null;
-      if (p.featured_media) {
-        try {
-          const { data: media } = await axios.get(`${HADEEYA_API}/media/${p.featured_media}`);
-          image = media.source_url;
-        } catch { /* ignore */ }
-      }
-      products.push({
-        id: p.id,
-        name: p.title?.rendered || 'Product',
-        price: 0, // Scraped dynamically if needed, or fetched from WP API if exposed
-        description: (p.excerpt?.rendered || '').replace(/<[^>]*>/g, '').trim(),
-        image,
-        link: p.link,
-        source: 'hadeeya',
-      });
+    const params: any = { per_page: limit, _fields: 'id,title,link,featured_media,excerpt' };
+
+    if (!isNaN(Number(keyword))) {
+      params.product_cat = Number(keyword);
+    } else {
+      params.search = String(keyword);
     }
+
+    const { data } = await axios.get(`${HADEEYA_API}/product`, { params });
+    const products: Product[] = [];
+
+    // Process in batches of 10 to avoid rate limiting while speeding up
+    for (let i = 0; i < data.length; i += 10) {
+      const batch = data.slice(i, i + 10);
+      const batchResults = await Promise.all(batch.map(async (p: any) => {
+        let image = null;
+        if (p.featured_media) {
+          try {
+            const { data: media } = await axios.get(`${HADEEYA_API}/media/${p.featured_media}`);
+            image = media.source_url;
+          } catch { /* ignore */ }
+        }
+
+        const details = await scrapeHadeeyaProductPage(p.link);
+
+        // Skip out of stock items
+        if (details.stock && details.stock.toLowerCase().includes('out of stock')) return null;
+
+        return {
+          id: p.id,
+          name: cheerio.load(p.title?.rendered || 'Product').text().replace(/\*/g, '').trim(),
+          price: details.price || 0,
+          description: details.formattedDetails,
+          image,
+          link: p.link,
+          source: 'hadeeya',
+        };
+      }));
+
+      for (const res of batchResults) {
+        if (res) products.push(res);
+      }
+    }
+
     return products;
   } catch {
     return [];
@@ -99,25 +133,26 @@ export async function fetchHadeeyaProducts(catId: string | number, limit = 15): 
 }
 
 export async function getCombinedCategories(): Promise<Category[]> {
-  const [kharchify, hadeeya] = await Promise.all([
-    fetchKharchifyCategories(),
-    fetchHadeeyaCategories(),
-  ]);
-  const cats = [...kharchify];
-  for (const h of hadeeya) {
-    if (!cats.some(c => c.name.toLowerCase() === h.name.toLowerCase())) cats.push(h);
+  const cats = await fetchKharchifyCategories();
+
+  for (const cat of HADEEYA_STATIC_CATEGORIES) {
+    cats.push({ name: cat.name, source: 'hadeeya', sourceId: String(cat.id) });
   }
+
   return cats;
 }
 
-export async function scrapeHadeeyaProductPage(url: string): Promise<{ price: number | null, stock: string, sku: string }> {
+export async function scrapeHadeeyaProductPage(url: string): Promise<{ price: number | null, stock: string, sku: string, formattedDetails: string }> {
   try {
     const { data } = await axios.get(url);
     const $ = cheerio.load(data);
-    const priceText = $('.price ins .woocommerce-Price-amount').text() || $('.price .woocommerce-Price-amount').text();
+
+    let originalPrice = $('del .woocommerce-Price-amount').first().text() || '';
+    const priceText = $('ins .woocommerce-Price-amount').first().text() || $('.price .woocommerce-Price-amount').first().text();
     const priceRaw = parseFloat(priceText.replace(/[^\d.]/g, ''));
     const price = !isNaN(priceRaw) ? Math.round(priceRaw * (1 + HADEEYA_MARKUP)) : null;
-    const stock = $('.stock').text().trim();
+
+    let stock = $('.stock').text().trim() || $('.in-stock').text().trim() || 'In Stock';
     let sku = '';
     const script = $('script[type="application/ld+json"]').html();
     if (script) {
@@ -128,9 +163,30 @@ export async function scrapeHadeeyaProductPage(url: string): Promise<{ price: nu
         if (prod) sku = prod.sku || '';
       } catch { /* ignore */ }
     }
-    return { price, stock, sku };
+
+    const infoLines: string[] = [];
+    $('.product-short-description ul li, .woocommerce-product-details__short-description ul li').each((_, el) => {
+      let text = $(el).text().trim().replace(/\*/g, '');
+      if (text.toUpperCase().includes('KINDLY NOTE')) {
+        text = `🚨 *${text}* 🚨`;
+      }
+      infoLines.push(text);
+    });
+    if (infoLines.length === 0) {
+      let pText = $('.product-short-description p, .woocommerce-product-details__short-description p').text().trim().replace(/\*/g, '');
+      if (pText.toUpperCase().includes('KINDLY NOTE')) {
+        pText = `🚨 *${pText}* 🚨`;
+      }
+      if (pText) infoLines.push(pText);
+    }
+
+    let formattedDetails = infoLines.join('\n');
+    if (formattedDetails) formattedDetails += '\n\n';
+    if (stock) formattedDetails += `Availability: ${stock}\n\n`;
+
+    return { price, stock, sku, formattedDetails };
   } catch {
-    return { price: null, stock: '', sku: '' };
+    return { price: null, stock: '', sku: '', formattedDetails: '' };
   }
 }
 
@@ -160,6 +216,13 @@ function cmToInch(cm?: number): string {
 }
 
 export function formatProduct(p: Product): string {
+  if (p.source === 'hadeeya') {
+    const lines = [`📌 *${p.name.replace(/&#038;/g, '&')}*`];
+    if (p.description) lines.push(`\n${p.description}`);
+    lines.push(`\n💰 Final Price: ₹${p.price}`);
+    return lines.join('\n');
+  }
+
   const lines = [`📌 *${p.name}*`, `💰 Price: ₹${p.price}`];
   if (p.category) lines.push(`🏷️ ${p.category}`);
   if (p.colour && p.colour !== 'N/A') lines.push(`🎨 Colour: ${p.colour}`);

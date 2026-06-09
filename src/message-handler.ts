@@ -9,7 +9,6 @@ import { sendWebhook } from './webhook.js';
 
 const userStates = new Map<string, UserState>();
 
-// Optional inline dedup if webhook doesn't do it
 const dedupCache = new Set<string>();
 function isDuplicate(msgId: string): boolean {
   if (!msgId) return false;
@@ -21,6 +20,35 @@ function isDuplicate(msgId: string): boolean {
     arr.slice(-1000).forEach(id => dedupCache.add(id));
   }
   return false;
+}
+
+export async function sendCategoryProducts(jid: string, selectedCat: any) {
+  await safeSendMessage(jid, { text: `🔍 Loading products for *${selectedCat.name}*...` }, { typing: false });
+
+  let products;
+  if (selectedCat.source === 'kharchify') {
+    products = await fetchKharchifyProducts(selectedCat.name, 10);
+  } else {
+    products = await fetchHadeeyaProducts(selectedCat.sourceId!, 10);
+  }
+
+  if (!products.length) {
+    await safeSendMessage(jid, { text: `❌ No products found in this category.` }, { typing: false });
+    return false; // Indicating failure to find products
+  }
+
+  for (const p of products) {
+    const caption = formatProduct(p);
+    if (p.image) {
+      const imgPath = await downloadImage(p.image, `${p.source}_${p.id}`);
+      if (imgPath) await safeSendMessage(jid, { image: { url: imgPath }, caption }, { typing: false });
+      else await safeSendMessage(jid, { text: caption }, { typing: false });
+    } else {
+      await safeSendMessage(jid, { text: caption }, { typing: false });
+    }
+  }
+  await safeSendMessage(jid, { text: 'To see categories again, say "Hi"!' }, { typing: false });
+  return true;
 }
 
 export async function handleIncomingMessages(m: any) {
@@ -90,7 +118,7 @@ export async function handleIncomingMessages(m: any) {
       userStates.set(jid, state);
     }
 
-    const isGreeting = ['hi', 'hello', 'salam', 'assalamu alaikum'].includes(lowerMsg);
+    const isGreeting = ['hi', 'hello', 'salam', 'assalamu alaikum', 'category'].includes(lowerMsg);
 
     if (isGreeting) {
       state.stage = 'categories';
@@ -104,47 +132,26 @@ export async function handleIncomingMessages(m: any) {
       return;
     }
 
-    if (state.stage === 'categories') {
-      let selectedCat = state.cats.find(c => c.name.toLowerCase() === lowerMsg);
-      if (!selectedCat) {
-        const num = parseInt(lowerMsg, 10);
-        if (!isNaN(num) && num > 0 && num <= state.cats.length) {
-          selectedCat = state.cats[num - 1];
-        }
+    // Aggressively check for category matches (whether by name or number)
+    const extractedNumMatch = text.match(/\d+/);
+    let selectedCat = state.cats.find(c => c.name.toLowerCase() === lowerMsg);
+    
+    if (!selectedCat && extractedNumMatch) {
+      const num = parseInt(extractedNumMatch[0], 10);
+      if (!isNaN(num) && num > 0 && num <= state.cats.length) {
+        selectedCat = state.cats[num - 1];
       }
+    }
 
-      if (selectedCat) {
-        state.selected = selectedCat;
-        state.stage = 'products';
-        await safeSendMessage(jid, { text: `🔍 Loading products for *${selectedCat.name}*...` });
-
-        let products;
-        if (selectedCat.source === 'kharchify') {
-          products = await fetchKharchifyProducts(selectedCat.name, 10);
-        } else {
-          products = await fetchHadeeyaProducts(selectedCat.sourceId!, 10);
-        }
-
-        if (!products.length) {
-          await safeSendMessage(jid, { text: `❌ No products found in this category.` });
-          state.stage = 'categories'; // reset
-          return;
-        }
-
-        for (const p of products) {
-          const caption = formatProduct(p);
-          if (p.image) {
-            const imgPath = await downloadImage(p.image, `${p.source}_${p.id}`);
-            if (imgPath) await safeSendMessage(jid, { image: { url: imgPath }, caption });
-            else await safeSendMessage(jid, { text: caption });
-          } else {
-            await safeSendMessage(jid, { text: caption });
-          }
-        }
-        await safeSendMessage(jid, { text: 'To see categories again, say "Hi"!' });
-        state.stage = 'categories'; // Reset so they can choose another next time easily
-        return;
-      }
+    if (selectedCat) {
+      state.selected = selectedCat;
+      state.stage = 'products';
+      
+      await sendCategoryProducts(jid, selectedCat);
+      
+      state.stage = 'categories'; // Reset so they can choose another next time easily
+      userStates.set(jid, state);
+      return;
     }
 
     // If it wasn't a greeting and wasn't a valid category selection, check if we should send categories
