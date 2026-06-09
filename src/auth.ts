@@ -72,7 +72,7 @@ export async function useSupabaseAuthState(sessionName: string = 'default'): Pro
               if (value) {
                 let saveValue = value;
                 if (category === 'app-state-sync-key') {
-                   saveValue = { ...value, value: (value as any).value.toString('base64') };
+                   saveValue = { ...(value as Record<string, any>), value: (value as any).value.toString('base64') };
                 }
                 tasks.push(writeData(saveValue, key));
               } else {
