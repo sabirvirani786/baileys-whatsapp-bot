@@ -1,0 +1,23 @@
+{
+  "bot": {
+    "name": "SafeBot",
+    "autoReply": true,
+    "replyOnlyInPrivateChats": true,
+    "minDelaySeconds": 5,
+    "maxDelaySeconds": 15,
+    "typingIndicator": true,
+    "typingDelayPerCharMs": 30,
+    "maxRepliesPerHour": 25,
+    "maxGlobalMessagesPerHour": 25,
+    "cooldownAfterBurst": 300,
+    "warmupEnabled": true
+  },
+  "session": {
+    "active": "default"
+  },
+  "webhook": {
+    "enabled": false,
+    "url": "",
+    "secret": ""
+  }
+}
