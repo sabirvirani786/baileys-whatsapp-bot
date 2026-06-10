@@ -10,11 +10,13 @@ import { useSupabaseAuthState } from './auth.js';
 
 let sock: WASocket | null = null;
 let currentQR: string | null = null;
+let pairingCode: string | null = null;
 let isConnected = false;
 
 export async function connectToWhatsApp(
   onMessage: (m: any) => void,
   onOpen?: () => void,
+  phoneNumber?: string,
 ): Promise<WASocket> {
   if (sock) {
     try { await sock.logout(); } catch { /* ignore */ }
@@ -56,12 +58,31 @@ export async function connectToWhatsApp(
         : 0;
 
       if (status !== DisconnectReason.loggedOut) {
-        setTimeout(() => connectToWhatsApp(onMessage, onOpen), 4000);
+        setTimeout(() => connectToWhatsApp(onMessage, onOpen, phoneNumber), 4000);
       } else {
         console.error('[connection] Logged out — delete auth_info_baileys and restart');
       }
     }
   });
+
+  // === PHONE NUMBER PAIRING CODE ===
+  if (phoneNumber) {
+    sock.ev.on('connection.update', (update) => {
+      if (update.connection === 'connecting' || update.qr) {
+        if (!sock!.authState.creds.registered) {
+          sock!.requestPairingCode(phoneNumber)
+            .then(code => {
+              pairingCode = code;
+              console.log(`[connection] Pairing Code: ${code}`);
+              console.log(`\n📲 Your Pairing Code: ${code}\nOpen WhatsApp → Linked Devices → Link with Phone Number → Enter this code`);
+            })
+            .catch(err => {
+              console.error('[connection] Failed to generate pairing code:', err);
+            });
+        }
+      }
+    });
+  }
 
   if (onMessage) sock.ev.on('messages.upsert', onMessage);
   return sock;
@@ -73,6 +94,10 @@ export function getSocket(): WASocket | null {
 
 export function getCurrentQR(): string | null {
   return currentQR;
+}
+
+export function getPairingCode(): string | null {
+  return pairingCode;
 }
 
 export function isWhatsAppConnected(): boolean {
@@ -91,9 +116,9 @@ export async function logoutWhatsApp(): Promise<void> {
   }
 }
 
-export async function reconnectWhatsApp(onMessage: (m: any) => void, onOpen?: () => void): Promise<WASocket> {
+export async function reconnectWhatsApp(onMessage: (m: any) => void, onOpen?: () => void, phoneNumber?: string): Promise<WASocket> {
   if (isWhatsAppConnected()) {
     throw new Error('Bot is already connected');
   }
-  return connectToWhatsApp(onMessage, onOpen);
+  return connectToWhatsApp(onMessage, onOpen, phoneNumber);
 }

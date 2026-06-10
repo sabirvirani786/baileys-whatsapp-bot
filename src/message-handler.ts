@@ -149,8 +149,17 @@ export async function handleIncomingMessages(m: any) {
       
       await sendCategoryProducts(jid, selectedCat);
       
-      state.stage = 'categories'; // Reset so they can choose another next time easily
-      userStates.set(jid, state);
+      // After sending products, check if we should show categories list
+      const sentRecently = await categorySentRecently(jid);
+      if (!sentRecently) {
+        state.stage = 'categories';
+        await markCategorySent(jid);
+        let reply = '🌙 *Welcome to Islamic Tabarrukat!*\n\nReply with a number or name to see products:\n\n';
+        state.cats.forEach((c, i) => {
+          reply += `${i + 1}. ${c.name}\n`;
+        });
+        await safeSendMessage(jid, { text: reply });
+      }
       return;
     }
 
