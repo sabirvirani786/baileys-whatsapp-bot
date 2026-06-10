@@ -36,7 +36,7 @@ function saveState(state: DailyPostState) {
 
 export async function runDailyJob() {
   console.log('[daily-poster] ===== DAILY POSTER JOB START =====');
-  
+
   try {
     const fs = await import('fs');
     const path = await import('path');
@@ -112,7 +112,7 @@ export async function runDailyJob() {
       console.error(`[daily-poster] Failed sending to ${jid}`, err);
     }
   }
-  
+
   saveState(state);
   console.log('[daily-poster] ===== DAILY POSTER JOB END =====');
 }
@@ -184,8 +184,20 @@ export function initScheduler() {
   const postH = env.DAILY_POST_HOUR;
   const postM = env.DAILY_POST_MINUTE;
   console.log(`[daily-poster] Scheduled daily poster at ${postH}:${postM.toString().padStart(2, '0')}`);
-  cron.schedule(`${postM} ${postH} * * *`, runDailyJob);
-  cron.schedule('0 6 * * *', scrapeHadeeya);
+  cron.schedule(`${postM} ${postH} * * *`, runDailyJob, { timezone: "Asia/Kolkata" });
+  cron.schedule('0 6 * * *', scrapeHadeeya, { timezone: "Asia/Kolkata" });
+
+  // Self-ping every 2 minutes to keep Render free tier awake
+  cron.schedule('*/2 * * * *', async () => {
+    try {
+      const url = process.env.RENDER_EXTERNAL_URL || 'https://baileys-whatsapp-bot-u5wc.onrender.com';
+      const { default: axios } = await import('axios');
+      await axios.get(url);
+      console.log(`[self-ping] Pinged ${url} to keep server awake`);
+    } catch (err: any) {
+      console.error(`[self-ping] Failed to ping server: ${err.message}`);
+    }
+  });
 
   // Clean up poster_images every 15 minutes (only files older than 15 mins)
   setInterval(async () => {
