@@ -2,7 +2,7 @@
   "bot": {
     "name": "SafeBot",
     "autoReply": true,
-    "replyOnlyInPrivateChats": true,
+    "replyOnlyInPrivateChats": false,
     "minDelaySeconds": 5,
     "maxDelaySeconds": 15,
     "typingIndicator": true,

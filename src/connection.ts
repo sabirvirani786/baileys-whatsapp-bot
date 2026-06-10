@@ -159,8 +159,8 @@ export function getPairingCode(): string | null {
 }
 
 export function isWhatsAppConnected(): boolean {
-  const result = isConnected && !!sock;
-  log(`isWhatsAppConnected() = ${result}`);
+  const result = (isConnected && !!sock) || !!sock?.user;
+  log(`isWhatsAppConnected() = ${result} (isConnected=${isConnected}, hasSock=${!!sock}, hasUser=${!!sock?.user})`);
   return result;
 }
 

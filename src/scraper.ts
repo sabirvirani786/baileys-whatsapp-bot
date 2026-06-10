@@ -13,12 +13,14 @@ const KHARCHIFY_BASE = 'https://kharchify.in/api/public/v1';
 const HADEEYA_API = 'https://hadeeya.in/wp-json/wp/v2';
 const HADEEYA_MARKUP = 0.20;
 
+const TIMEOUT = 15000;
+
 const headers = { Authorization: `Bearer ${env.KHARCHIFY_API_KEY}` };
 
 export async function fetchKharchifyCategories(): Promise<Category[]> {
   log('fetchKharchifyCategories()');
   try {
-    const { data } = await axios.get(`${KHARCHIFY_BASE}/categories`, { headers });
+    const { data } = await axios.get(`${KHARCHIFY_BASE}/categories`, { headers, timeout: TIMEOUT });
     const cats = (data.data || []).map((c: any) => ({ name: c.name, source: 'kharchify', sourceId: c.id }));
     log(`Fetched ${cats.length} Kharchify categories`);
     return cats;
@@ -33,7 +35,7 @@ export async function fetchKharchifyProducts(search?: string, limit = 30): Promi
   log(`fetchKharchifyProducts(search=${search}, limit=${limit})`);
   try {
     const params = { page: 1, limit, stockStatus: 'in', search };
-    const { data } = await axios.get(`${KHARCHIFY_BASE}/products`, { headers, params });
+    const { data } = await axios.get(`${KHARCHIFY_BASE}/products`, { headers, params, timeout: TIMEOUT });
     const raw = data.data || [];
     log(`Kharchify API returned ${raw.length} products`);
     const products = raw.map((p: any) => ({
@@ -63,7 +65,7 @@ export async function fetchKharchifyProducts(search?: string, limit = 30): Promi
 export async function fetchKharchifySets(): Promise<ProductSet[]> {
   log('fetchKharchifySets()');
   try {
-    const { data } = await axios.get(`${KHARCHIFY_BASE}/sets`, { headers });
+    const { data } = await axios.get(`${KHARCHIFY_BASE}/sets`, { headers, timeout: TIMEOUT });
     const sets = data.data || [];
     log(`Fetched ${sets.length} sets`);
     return sets;
@@ -78,6 +80,7 @@ export async function fetchHadeeyaCategories(): Promise<Category[]> {
   try {
     const { data } = await axios.get(`${HADEEYA_API}/product_cat`, {
       params: { per_page: 50, hide_empty: true, _fields: 'id,name,count' },
+      timeout: TIMEOUT,
     });
     const cats = (data || [])
       .filter((c: any) => c.name !== 'Uncategorized' && c.count > 0)
@@ -113,7 +116,7 @@ export async function fetchHadeeyaProducts(keyword: string | number, limit = 5):
       params.search = String(keyword);
     }
 
-    const { data } = await axios.get(`${HADEEYA_API}/product`, { params });
+    const { data } = await axios.get(`${HADEEYA_API}/product`, { params, timeout: TIMEOUT });
     log(`Hadeeya API returned ${data?.length || 0} products`);
     const products: Product[] = [];
 
@@ -125,7 +128,7 @@ export async function fetchHadeeyaProducts(keyword: string | number, limit = 5):
         let image = null;
         if (p.featured_media) {
           try {
-            const { data: media } = await axios.get(`${HADEEYA_API}/media/${p.featured_media}`);
+            const { data: media } = await axios.get(`${HADEEYA_API}/media/${p.featured_media}`, { timeout: TIMEOUT });
             image = media.source_url;
           } catch { log(`Failed to fetch media for product ${p.id}`); }
         }
@@ -178,7 +181,7 @@ export async function getCombinedCategories(): Promise<Category[]> {
 export async function scrapeHadeeyaProductPage(url: string): Promise<{ price: number | null, stock: string, sku: string, formattedDetails: string }> {
   log(`scrapeHadeeyaProductPage(${url})`);
   try {
-    const { data } = await axios.get(url);
+    const { data } = await axios.get(url, { timeout: TIMEOUT });
     const $ = cheerio.load(data);
 
     let originalPrice = $('del .woocommerce-Price-amount').first().text() || '';
@@ -237,7 +240,7 @@ export async function downloadImage(url: string, filename: string): Promise<stri
 
   try {
     log(`Downloading from ${url?.substring(0, 80)}...`);
-    const { data } = await axios.get(url, { responseType: 'stream' });
+    const { data } = await axios.get(url, { responseType: 'stream', timeout: TIMEOUT });
     const writer = fs.createWriteStream(p);
     data.pipe(writer);
     return new Promise((resolve) => {

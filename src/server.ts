@@ -1271,10 +1271,12 @@ if (headerStatus && headerStatus.textContent.includes('Awaiting Scan')) {
 app.get('/api/contacts/export', async (_req, res) => {
   try {
     const sock = getSocket();
-    if (!sock || !sock.user) {
-      return res.status(400).json({ success: false, error: 'Bot is not connected' });
-    }
     const contacts = getCachedContacts();
+    if (!contacts.length) {
+      if (!sock || !sock.user) {
+        return res.status(400).json({ success: false, error: 'Bot is not connected. Wait for connection or check contacts cache.' });
+      }
+    }
     const exported = contacts
       .filter(c => c.id && c.id.endsWith('@s.whatsapp.net'))
       .map(c => ({
@@ -1294,10 +1296,12 @@ app.get('/api/contacts/export', async (_req, res) => {
 app.get('/api/contacts/whatsapp', async (_req, res) => {
   try {
     const sock = getSocket();
-    if (!sock || !sock.user) {
-      return res.status(400).json({ success: false, error: 'Bot is not connected' });
-    }
     const contacts = getCachedContacts();
+    if (!contacts.length) {
+      if (!sock || !sock.user) {
+        return res.status(400).json({ success: false, error: 'Bot is not connected. Wait for connection or check contacts cache.' });
+      }
+    }
     const list = contacts
       .filter(c => c.id && (c.id.endsWith('@s.whatsapp.net') || c.id.endsWith('@g.us')))
       .map(c => ({

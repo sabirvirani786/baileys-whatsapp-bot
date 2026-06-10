@@ -9,7 +9,7 @@ const CONFIG_PATH = 'config.json';
 const DEFAULTS: BotConfig = {
   bot: {
     autoReply: true,
-    replyOnlyInPrivateChats: true,
+    replyOnlyInPrivateChats: false,
     minDelaySeconds: 5,
     maxDelaySeconds: 15,
     typingIndicator: true,
@@ -53,6 +53,6 @@ export const env = {
   SUPABASE_KEY: process.env.SUPABASE_KEY ?? '',
   DAILY_POST_GROUPS: (process.env.DAILY_POST_GROUPS ?? '').split(',').map(s => s.trim()).filter(Boolean),
 DAILY_POST_HOUR: 2,
-DAILY_POST_MINUTE: 0,
+DAILY_POST_MINUTE: 15,
 PRICE_ADJUSTMENT_PCT: parseFloat(process.env.PRICE_ADJUSTMENT_PERCENT ?? '20'),
 };
