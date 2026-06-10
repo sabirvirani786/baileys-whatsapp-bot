@@ -1,7 +1,7 @@
 import express from 'express';
 import axios from 'axios';
 import * as cheerio from 'cheerio';
-import { getCurrentQR, getSocket, logoutWhatsApp, reconnectWhatsApp, isWhatsAppConnected } from './connection.js';
+import { getCurrentQR, getSocket, logoutWhatsApp, reconnectWhatsApp, isWhatsAppConnected, getCachedContacts } from './connection.js';
 import { getConfig } from './config.js';
 import { fetchHadeeyaCategories, scrapeHadeeyaProductPage, getCombinedCategories } from './scraper.js';
 import { getDailyPostPreview } from './daily-poster.js';
@@ -642,7 +642,7 @@ app.post('/api/whatsapp/control', async (req, res) => {
       await logoutWhatsApp();
       res.json({ success: true, message: 'WhatsApp logged out successfully' });
     } else if (action === 'reconnect') {
-      const sock = reconnectWhatsApp(handleIncomingMessages);
+      await reconnectWhatsApp(handleIncomingMessages);
       res.json({ success: true, message: 'WhatsApp reconnecting...' });
     } else if (action === 'status') {
       res.json({ 
@@ -1250,6 +1250,16 @@ dsSendBtn.addEventListener('click', async () => {
   dsSendBtn.innerText = 'Send Now';
 });
 
+// Auto-refresh page when disconnected to pick up QR / status changes
+const headerStatus = document.getElementById('header-status');
+if (headerStatus && headerStatus.textContent.includes('Initializing')) {
+  console.log('[dashboard] Status is Initializing, will auto-refresh every 10s to check for QR');
+  setTimeout(() => { console.log('[dashboard] Auto-refreshing...'); location.reload(); }, 10000);
+}
+if (headerStatus && headerStatus.textContent.includes('Awaiting Scan')) {
+  console.log('[dashboard] Status is Awaiting Scan, will auto-refresh every 15s');
+  setTimeout(() => { console.log('[dashboard] Auto-refreshing...'); location.reload(); }, 15000);
+}
 
 </script>
 </body>
@@ -1264,11 +1274,10 @@ app.get('/api/contacts/export', async (_req, res) => {
     if (!sock || !sock.user) {
       return res.status(400).json({ success: false, error: 'Bot is not connected' });
     }
-    const wa = sock as any;
-    const contacts = await wa.getContacts();
+    const contacts = getCachedContacts();
     const exported = contacts
-      .filter((c: any) => c.id && c.id.endsWith('@s.whatsapp.net'))
-      .map((c: any) => ({
+      .filter(c => c.id && c.id.endsWith('@s.whatsapp.net'))
+      .map(c => ({
         number: c.id.replace('@s.whatsapp.net', ''),
         name: c.name || c.notify || 'Unknown',
         id: c.id,
@@ -1288,11 +1297,10 @@ app.get('/api/contacts/whatsapp', async (_req, res) => {
     if (!sock || !sock.user) {
       return res.status(400).json({ success: false, error: 'Bot is not connected' });
     }
-    const wa = sock as any;
-    const contacts = await wa.getContacts();
+    const contacts = getCachedContacts();
     const list = contacts
-      .filter((c: any) => c.id && (c.id.endsWith('@s.whatsapp.net') || c.id.endsWith('@g.us')))
-      .map((c: any) => ({
+      .filter(c => c.id && (c.id.endsWith('@s.whatsapp.net') || c.id.endsWith('@g.us')))
+      .map(c => ({
         id: c.id,
         number: c.id.replace('@s.whatsapp.net', '').replace('@g.us', ''),
         name: c.name || c.notify || 'Unknown',

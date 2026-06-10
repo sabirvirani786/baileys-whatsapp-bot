@@ -5,6 +5,10 @@ import path from 'path';
 import { env } from './config.js';
 import type { Category, Product, ProductSet, HadeeyaProduct } from './types.js';
 
+function log(msg: string) {
+  console.log(`[${new Date().toISOString()}] [scraper] ${msg}`);
+}
+
 const KHARCHIFY_BASE = 'https://kharchify.in/api/public/v1';
 const HADEEYA_API = 'https://hadeeya.in/wp-json/wp/v2';
 const HADEEYA_MARKUP = 0.20;
@@ -12,20 +16,27 @@ const HADEEYA_MARKUP = 0.20;
 const headers = { Authorization: `Bearer ${env.KHARCHIFY_API_KEY}` };
 
 export async function fetchKharchifyCategories(): Promise<Category[]> {
+  log('fetchKharchifyCategories()');
   try {
     const { data } = await axios.get(`${KHARCHIFY_BASE}/categories`, { headers });
-    return (data.data || []).map((c: any) => ({ name: c.name, source: 'kharchify', sourceId: c.id }));
-  } catch (err) {
+    const cats = (data.data || []).map((c: any) => ({ name: c.name, source: 'kharchify', sourceId: c.id }));
+    log(`Fetched ${cats.length} Kharchify categories`);
+    return cats;
+  } catch (err: any) {
+    log(`Kharchify categories fetch failed: ${err.message}`);
     console.error('[scraper] Kharchify categories fetch failed');
     return [];
   }
 }
 
 export async function fetchKharchifyProducts(search?: string, limit = 30): Promise<Product[]> {
+  log(`fetchKharchifyProducts(search=${search}, limit=${limit})`);
   try {
     const params = { page: 1, limit, stockStatus: 'in', search };
     const { data } = await axios.get(`${KHARCHIFY_BASE}/products`, { headers, params });
-    return (data.data || []).map((p: any) => ({
+    const raw = data.data || [];
+    log(`Kharchify API returned ${raw.length} products`);
+    const products = raw.map((p: any) => ({
       id: p.id,
       name: p.name,
       price: p.sell_price || p.mrp || p.price || 0,
@@ -40,30 +51,41 @@ export async function fetchKharchifyProducts(search?: string, limit = 30): Promi
       category: p.category?.name || 'Category',
       source: 'kharchify',
     }));
-  } catch (err) {
+    log(`Mapped ${products.length} products`);
+    return products;
+  } catch (err: any) {
+    log(`Kharchify products fetch failed: ${err.message}`);
     console.error('[scraper] Kharchify products fetch failed');
     return [];
   }
 }
 
 export async function fetchKharchifySets(): Promise<ProductSet[]> {
+  log('fetchKharchifySets()');
   try {
     const { data } = await axios.get(`${KHARCHIFY_BASE}/sets`, { headers });
-    return data.data || [];
+    const sets = data.data || [];
+    log(`Fetched ${sets.length} sets`);
+    return sets;
   } catch {
+    log('fetchKharchifySets failed');
     return [];
   }
 }
 
 export async function fetchHadeeyaCategories(): Promise<Category[]> {
+  log('fetchHadeeyaCategories()');
   try {
     const { data } = await axios.get(`${HADEEYA_API}/product_cat`, {
       params: { per_page: 50, hide_empty: true, _fields: 'id,name,count' },
     });
-    return (data || [])
+    const cats = (data || [])
       .filter((c: any) => c.name !== 'Uncategorized' && c.count > 0)
       .map((c: any) => ({ name: c.name, source: 'hadeeya', sourceId: c.id }));
+    log(`Fetched ${cats.length} Hadeeya categories`);
+    return cats;
   } catch {
+    log('fetchHadeeyaCategories failed');
     return [];
   }
 }
@@ -81,6 +103,7 @@ const HADEEYA_STATIC_CATEGORIES = [
 ];
 
 export async function fetchHadeeyaProducts(keyword: string | number, limit = 5): Promise<Product[]> {
+  log(`fetchHadeeyaProducts(keyword=${keyword}, limit=${limit})`);
   try {
     const params: any = { per_page: limit, _fields: 'id,title,link,featured_media,excerpt' };
 
@@ -91,24 +114,29 @@ export async function fetchHadeeyaProducts(keyword: string | number, limit = 5):
     }
 
     const { data } = await axios.get(`${HADEEYA_API}/product`, { params });
+    log(`Hadeeya API returned ${data?.length || 0} products`);
     const products: Product[] = [];
 
     // Process in batches of 10 to avoid rate limiting while speeding up
     for (let i = 0; i < data.length; i += 10) {
       const batch = data.slice(i, i + 10);
+      log(`Processing batch ${i / 10 + 1} of ${Math.ceil(data.length / 10)}`);
       const batchResults = await Promise.all(batch.map(async (p: any) => {
         let image = null;
         if (p.featured_media) {
           try {
             const { data: media } = await axios.get(`${HADEEYA_API}/media/${p.featured_media}`);
             image = media.source_url;
-          } catch { /* ignore */ }
+          } catch { log(`Failed to fetch media for product ${p.id}`); }
         }
 
         const details = await scrapeHadeeyaProductPage(p.link);
 
         // Skip out of stock items
-        if (details.stock && details.stock.toLowerCase().includes('out of stock')) return null;
+        if (details.stock && details.stock.toLowerCase().includes('out of stock')) {
+          log(`Skipping out-of-stock product ${p.id}`);
+          return null;
+        }
 
         return {
           id: p.id,
@@ -126,23 +154,29 @@ export async function fetchHadeeyaProducts(keyword: string | number, limit = 5):
       }
     }
 
+    log(`Returning ${products.length} Hadeeya products`);
     return products;
-  } catch {
+  } catch (err: any) {
+    log(`fetchHadeeyaProducts failed: ${err.message}`);
     return [];
   }
 }
 
 export async function getCombinedCategories(): Promise<Category[]> {
+  log('getCombinedCategories()');
   const cats = await fetchKharchifyCategories();
+  log(`Adding ${HADEEYA_STATIC_CATEGORIES.length} static Hadeeya categories`);
 
   for (const cat of HADEEYA_STATIC_CATEGORIES) {
     cats.push({ name: cat.name, source: 'hadeeya', sourceId: String(cat.id) });
   }
 
+  log(`Total combined categories: ${cats.length}`);
   return cats;
 }
 
 export async function scrapeHadeeyaProductPage(url: string): Promise<{ price: number | null, stock: string, sku: string, formattedDetails: string }> {
+  log(`scrapeHadeeyaProductPage(${url})`);
   try {
     const { data } = await axios.get(url);
     const $ = cheerio.load(data);
@@ -184,29 +218,34 @@ export async function scrapeHadeeyaProductPage(url: string): Promise<{ price: nu
     if (formattedDetails) formattedDetails += '\n\n';
     if (stock) formattedDetails += `Availability: ${stock}\n\n`;
 
+    log(`Scraped: price=${price}, stock="${stock}", sku="${sku}"`);
     return { price, stock, sku, formattedDetails };
-  } catch {
+  } catch (err: any) {
+    log(`scrapeHadeeyaProductPage failed: ${err.message}`);
     return { price: null, stock: '', sku: '', formattedDetails: '' };
   }
 }
 
 export async function downloadImage(url: string, filename: string): Promise<string | null> {
+  log(`downloadImage(url=${url?.substring(0, 80)}..., filename=${filename})`);
   const dir = path.resolve('poster_images');
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  if (!fs.existsSync(dir)) { fs.mkdirSync(dir, { recursive: true }); log(`Created directory: ${dir}`); }
   const ext = url.split('.').pop()?.split('?')[0]?.toLowerCase() || 'jpg';
-  if (['mp4', 'mov', 'avi'].includes(ext)) return null;
+  if (['mp4', 'mov', 'avi'].includes(ext)) { log(`Skipping video file: ${ext}`); return null; }
   const p = path.join(dir, `${filename}.${ext}`);
-  if (fs.existsSync(p)) return p;
+  if (fs.existsSync(p)) { log(`Image already cached: ${p}`); return p; }
 
   try {
+    log(`Downloading from ${url?.substring(0, 80)}...`);
     const { data } = await axios.get(url, { responseType: 'stream' });
     const writer = fs.createWriteStream(p);
     data.pipe(writer);
     return new Promise((resolve) => {
-      writer.on('finish', () => resolve(p));
-      writer.on('error', () => resolve(null));
+      writer.on('finish', () => { log(`Downloaded: ${p}`); resolve(p); });
+      writer.on('error', (e) => { log(`Download failed: ${e}`); resolve(null); });
     });
-  } catch {
+  } catch (err: any) {
+    log(`downloadImage axios error: ${err.message}`);
     return null;
   }
 }
