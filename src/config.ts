@@ -53,6 +53,6 @@ export const env = {
   SUPABASE_KEY: process.env.SUPABASE_KEY ?? '',
   DAILY_POST_GROUPS: (process.env.DAILY_POST_GROUPS ?? '').split(',').map(s => s.trim()).filter(Boolean),
 DAILY_POST_HOUR: 13,
-DAILY_POST_MINUTE: 40,
+DAILY_POST_MINUTE: 50,
 PRICE_ADJUSTMENT_PCT: parseFloat(process.env.PRICE_ADJUSTMENT_PERCENT ?? '20'),
 };
