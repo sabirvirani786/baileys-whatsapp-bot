@@ -10,6 +10,7 @@ import { useSupabaseAuthState } from './auth.js';
 
 let sock: WASocket | null = null;
 let currentQR: string | null = null;
+let isConnected = false;
 
 export async function connectToWhatsApp(
   onMessage: (m: any) => void,
@@ -43,11 +44,13 @@ export async function connectToWhatsApp(
     }
 
     if (connection === 'open') {
+      isConnected = true;
       console.log('[connection] Connected to WhatsApp');
       onOpen?.();
     }
 
     if (connection === 'close') {
+      isConnected = false;
       const status = lastDisconnect?.error instanceof Boom
         ? lastDisconnect.error.output.statusCode
         : 0;
@@ -70,4 +73,27 @@ export function getSocket(): WASocket | null {
 
 export function getCurrentQR(): string | null {
   return currentQR;
+}
+
+export function isWhatsAppConnected(): boolean {
+  return isConnected && !!sock;
+}
+
+export async function logoutWhatsApp(): Promise<void> {
+  if (sock) {
+    try {
+      await sock.logout();
+    } catch (err) {
+      console.error('[connection] Error during logout:', err);
+    }
+    sock = null;
+    isConnected = false;
+  }
+}
+
+export async function reconnectWhatsApp(onMessage: (m: any) => void, onOpen?: () => void): Promise<WASocket> {
+  if (isWhatsAppConnected()) {
+    throw new Error('Bot is already connected');
+  }
+  return connectToWhatsApp(onMessage, onOpen);
 }

@@ -1,7 +1,7 @@
 import express from 'express';
 import axios from 'axios';
 import * as cheerio from 'cheerio';
-import { getCurrentQR, getSocket } from './connection.js';
+import { getCurrentQR, getSocket, logoutWhatsApp, reconnectWhatsApp, isWhatsAppConnected } from './connection.js';
 import { getConfig } from './config.js';
 import { fetchHadeeyaCategories, scrapeHadeeyaProductPage, getCombinedCategories } from './scraper.js';
 import { getDailyPostPreview } from './daily-poster.js';
@@ -49,6 +49,15 @@ app.get('/', (req, res) => {
       <div class="container">
         <h1>WhatsApp Bot Dashboard</h1>
         <div class="status ${sock?.user ? 'connected' : 'disconnected'}">Status: ${state}</div>
+        
+        <div class="input-row" style="margin: 20px 0;">
+          <button id="connect-btn" style="background: ${sock?.user ? '#ffc107' : '#28a745'}; padding: 10px 20px; border: none; border-radius: 4px; color: ${sock?.user ? '#212529' : 'white'}; font-weight: bold; cursor: pointer; margin: 5px;">
+            ${sock?.user ? 'Stop WhatsApp' : 'Start WhatsApp'}
+          </button>
+          <button id="logout-btn" style="background: #dc3545; padding: 10px 20px; border: none; border-radius: 4px; color: white; font-weight: bold; cursor: pointer; margin: 5px;">Logout</button>
+        </div>
+        
+        <div id="connection-status" style="margin: 10px 0; padding: 10px; border-radius: 4px; font-size: 14px; display: none;"></div>
         
         <div id="qr-container">
           <p>Scan this QR code with WhatsApp:</p>
@@ -274,6 +283,32 @@ app.post('/api/test/daily-post-now', async (_req, res) => {
     const { runDailyJob } = await import('./daily-poster.js');
     await runDailyJob();
     res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ── WhatsApp Connection Control ───────────────────────────────────────────
+app.post('/api/whatsapp/control', async (req, res) => {
+  const { action } = req.body;
+  
+  try {
+    if (action === 'logout') {
+      await logoutWhatsApp();
+      res.json({ success: true, message: 'WhatsApp logged out successfully' });
+    } else if (action === 'reconnect') {
+      const sock = reconnectWhatsApp(handleIncomingMessages);
+      res.json({ success: true, message: 'WhatsApp reconnecting...' });
+    } else if (action === 'status') {
+      res.json({ 
+        success: true, 
+        connected: isWhatsAppConnected(),
+        user: getSocket()?.user,
+        hasQR: !!(getCurrentQR() && !getSocket()?.user)
+      });
+    } else {
+      res.status(400).json({ success: false, error: 'Invalid action' });
+    }
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
   }

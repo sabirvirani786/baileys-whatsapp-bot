@@ -1,6 +1,7 @@
 import { getConfig } from './config.js';
 import { getSocket } from './connection.js';
 import messageQueue from './message-queue.js';
+import { isWhatsAppConnected } from './connection.js';
 
 async function simulateTyping(jid: string, textLength = 10): Promise<void> {
   const cfg = getConfig();
@@ -22,6 +23,10 @@ export async function safeSendMessage(jid: string, content: any, opts?: { typing
     const text = content.text || '';
     if (opts?.typing !== false) {
       await simulateTyping(jid, text.length);
+    }
+    if (!isWhatsAppConnected()) {
+      console.log(`[send] Skipping message to ${jid} - WhatsApp not connected`);
+      return false;
     }
     await messageQueue.add(jid, content);
     return true;

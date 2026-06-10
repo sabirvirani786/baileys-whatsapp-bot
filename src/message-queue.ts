@@ -1,5 +1,6 @@
 import { getConfig } from './config.js';
 import { getSocket } from './connection.js';
+import { isWhatsAppConnected } from './connection.js';
 
 interface QueueItem {
   jid: string;
@@ -24,6 +25,8 @@ class MessageQueue {
     if (this.processing || !this.queue.length) return;
     this.processing = true;
 
+    let item: QueueItem | null = null;
+
     try {
       const now = Date.now();
       if (now - this.hourlyReset > 3_600_000) {
@@ -38,7 +41,7 @@ class MessageQueue {
         return this.process();
       }
 
-      const item = this.queue.shift()!;
+      item = this.queue.shift()!;
       let gap = Date.now() - this.lastSendTime;
       
       // If we are switching to a new chat/group, add a 10 second cooldown
@@ -54,7 +57,7 @@ class MessageQueue {
       if (gap < 5000) await delay(5000 - gap);
 
       const sock = getSocket();
-      if (sock) {
+      if (sock && isWhatsAppConnected()) {
         console.log(`[queue] Sending message to ${item.jid}...`);
         
         // Convert local file URL to buffer for safety
@@ -73,9 +76,35 @@ class MessageQueue {
         console.log(`[queue] Successfully sent message to ${item.jid}`);
         this.lastSendTime = Date.now();
         this.msgCount++;
+      } else {
+        console.log(`[queue] Skipping message to ${item.jid} - WhatsApp not connected`);
+        this.queue.unshift(item);
       }
     } catch (err) {
       console.error('[queue] send error', err);
+      
+      // Check if it's a connection error that we can retry for
+      if (err && typeof err === 'object' && 'output' in err) {
+        const errorOutput = err.output as any;
+        const statusCode = errorOutput?.statusCode;
+        const errorMessage = errorOutput?.payload?.message?.toLowerCase() || '';
+        
+        const isConnectionError = 
+          statusCode === 428 || 
+          errorMessage.includes('connection closed') ||
+          errorMessage.includes('precondition required') ||
+          errorMessage.includes('not connected') ||
+          errorMessage.includes('network error');
+        
+        if (isConnectionError && !isWhatsAppConnected()) {
+          console.log(`[queue] Connection error detected for ${item?.jid}, adding back to queue with retry logic`);
+          if (item) {
+            this.queue.unshift(item);
+          }
+        } else {
+          console.log(`[queue] Non-retryable error for ${item?.jid}, dropping from queue`);
+        }
+      }
     } finally {
       this.processing = false;
       if (this.queue.length) setTimeout(() => this.process(), 1500);
