@@ -17,11 +17,64 @@ let currentQR: string | null = null;
 let pairingCode: string | null = null;
 let isConnected = false;
 
-// Contact cache populated from contacts.upsert events
+// Contact cache populated from messaging-history.set / chats.upsert events
 let cachedContacts: { id: string; name: string; notify: string }[] = [];
 
 export function getCachedContacts() {
   return cachedContacts;
+}
+
+export function clearContactCache() {
+  cachedContacts = [];
+}
+
+export async function refreshContactCache(sock: WASocket) {
+  log('refreshContactCache() — fetching contacts from groups and chats');
+  try {
+    const wa = sock as any;
+    const contactsMap = new Map<string, { id: string; name: string; notify: string }>();
+
+    // 1. Extract from all participating groups
+    try {
+      const groups = await sock.groupFetchAllParticipating();
+      log(`Fetched ${Object.keys(groups).length} groups`);
+      for (const [gid, group] of Object.entries(groups)) {
+        const grp = group as any;
+        if (grp.participants) {
+          for (const p of grp.participants) {
+            const id = typeof p === 'string' ? p : p.id;
+            if (id && !contactsMap.has(id)) {
+              const name = typeof p === 'string' ? '' : (p.name || p.lid || '');
+              contactsMap.set(id, { id, name: name || '', notify: '' });
+            }
+          }
+        }
+      }
+      log(`Extracted ${contactsMap.size} contacts from groups`);
+    } catch (e: any) {
+      log(`Group fetch failed: ${e.message}`);
+    }
+
+    // 2. Try to get contacts from internal BAILNEYS store (if available via any cast)
+    try {
+      if (typeof wa.getContacts === 'function') {
+        const rawContacts = await wa.getContacts();
+        if (rawContacts?.length) {
+          for (const c of rawContacts) {
+            if (c.id) {
+              contactsMap.set(c.id, { id: c.id, name: c.name || c.notify || '', notify: c.notify || '' });
+            }
+          }
+          log(`Added ${rawContacts.length} contacts from socket.getContacts()`);
+        }
+      }
+    } catch { /* not available */ }
+
+    cachedContacts = Array.from(contactsMap.values());
+    log(`refreshContactCache complete — ${cachedContacts.length} total contacts`);
+  } catch (err: any) {
+    log(`refreshContactCache error: ${err.message}`);
+  }
 }
 
 export async function connectToWhatsApp(
@@ -83,6 +136,8 @@ export async function connectToWhatsApp(
       isConnected = true;
       log(`Connected to WhatsApp as ${sock?.user?.id || 'unknown'}`);
       onOpen?.();
+      // Refresh contact cache on connect
+      refreshContactCache(sock!).catch(e => log(`Initial contact cache refresh failed: ${e.message}`));
     }
 
     if (connection === 'close') {

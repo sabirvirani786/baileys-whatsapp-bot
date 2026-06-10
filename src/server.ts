@@ -1,7 +1,7 @@
 import express from 'express';
 import axios from 'axios';
 import * as cheerio from 'cheerio';
-import { getCurrentQR, getSocket, logoutWhatsApp, reconnectWhatsApp, isWhatsAppConnected, getCachedContacts } from './connection.js';
+import { getCurrentQR, getSocket, logoutWhatsApp, reconnectWhatsApp, isWhatsAppConnected, getCachedContacts, refreshContactCache } from './connection.js';
 import { getConfig } from './config.js';
 import { fetchHadeeyaCategories, scrapeHadeeyaProductPage, getCombinedCategories } from './scraper.js';
 import { getDailyPostPreview } from './daily-poster.js';
@@ -579,17 +579,42 @@ app.post('/api/send-category', async (req, res) => {
 
 app.get('/api/history-numbers', async (_req, res) => {
   try {
+    const allNumbers = new Set<string>();
+
+    // 1. From category-sent.json history
     const fs = await import('fs');
-    const path = 'data/category-sent.json';
-    if (fs.existsSync(path)) {
-      const d = JSON.parse(fs.readFileSync(path, 'utf-8'));
-      const numbers = Object.keys(d)
-        .filter(jid => jid.includes('@s.whatsapp.net'))
-        .map(jid => jid.split('@')[0]);
-      res.json({ success: true, data: numbers });
-    } else {
-      res.json({ success: true, data: [] });
+    const catPath = 'data/category-sent.json';
+    if (fs.existsSync(catPath)) {
+      const d = JSON.parse(fs.readFileSync(catPath, 'utf-8'));
+      for (const jid of Object.keys(d)) {
+        if (jid.includes('@s.whatsapp.net')) allNumbers.add(jid.split('@')[0]);
+      }
     }
+
+    // 2. From contact cache
+    const contacts = getCachedContacts();
+    for (const c of contacts) {
+      if (c.id.endsWith('@s.whatsapp.net')) allNumbers.add(c.id.split('@')[0]);
+    }
+
+    // 3. From groups (group participants)
+    const sock = getSocket();
+    if (sock?.user) {
+      try {
+        const groups = await sock.groupFetchAllParticipating();
+        for (const gid of Object.keys(groups)) {
+          const grp = (groups as any)[gid];
+          if (grp.participants) {
+            for (const p of grp.participants) {
+              const id = typeof p === 'string' ? p : p.id;
+              if (id && id.endsWith('@s.whatsapp.net')) allNumbers.add(id.split('@')[0]);
+            }
+          }
+        }
+      } catch { /* ignore */ }
+    }
+
+    res.json({ success: true, data: Array.from(allNumbers) });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
   }
@@ -1271,11 +1296,14 @@ if (headerStatus && headerStatus.textContent.includes('Awaiting Scan')) {
 app.get('/api/contacts/export', async (_req, res) => {
   try {
     const sock = getSocket();
-    const contacts = getCachedContacts();
+    let contacts = getCachedContacts();
+    if (!contacts.length && sock?.user) {
+      // Try to refresh cache on demand
+      await refreshContactCache(sock);
+      contacts = getCachedContacts();
+    }
     if (!contacts.length) {
-      if (!sock || !sock.user) {
-        return res.status(400).json({ success: false, error: 'Bot is not connected. Wait for connection or check contacts cache.' });
-      }
+      return res.status(400).json({ success: false, error: 'No contacts in cache. Bot may still be syncing.' });
     }
     const exported = contacts
       .filter(c => c.id && c.id.endsWith('@s.whatsapp.net'))
@@ -1296,11 +1324,13 @@ app.get('/api/contacts/export', async (_req, res) => {
 app.get('/api/contacts/whatsapp', async (_req, res) => {
   try {
     const sock = getSocket();
-    const contacts = getCachedContacts();
+    let contacts = getCachedContacts();
+    if (!contacts.length && sock?.user) {
+      await refreshContactCache(sock);
+      contacts = getCachedContacts();
+    }
     if (!contacts.length) {
-      if (!sock || !sock.user) {
-        return res.status(400).json({ success: false, error: 'Bot is not connected. Wait for connection or check contacts cache.' });
-      }
+      return res.status(400).json({ success: false, error: 'No contacts in cache. Bot may still be syncing.' });
     }
     const list = contacts
       .filter(c => c.id && (c.id.endsWith('@s.whatsapp.net') || c.id.endsWith('@g.us')))
