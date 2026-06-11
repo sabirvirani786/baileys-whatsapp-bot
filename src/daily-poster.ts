@@ -158,6 +158,79 @@ export async function runDailyJob() {
   log('===== DAILY POSTER JOB END =====');
 }
 
+export async function runDailyJobWithSelection(
+  selectedKharchifyIds: string[],
+  selectedHadeeyaIds: number[]
+) {
+  log(`runDailyJobWithSelection() — kharchify: [${selectedKharchifyIds}], hadeeya: [${selectedHadeeyaIds}]`);
+
+  const groups = env.DAILY_POST_GROUPS;
+  log(`Target groups (${groups.length}): ${JSON.stringify(groups)}`);
+  if (!groups.length) throw new Error('No target groups configured in DAILY_POST_GROUPS');
+
+  // Resolve Kharchify products
+  let chunk: any[] = [];
+  if (selectedKharchifyIds.length) {
+    const allKharchify = await fetchKharchifyProducts(undefined, 50);
+    chunk = allKharchify.filter(p => selectedKharchifyIds.includes(String(p.id)));
+    log(`Resolved ${chunk.length} / ${selectedKharchifyIds.length} Kharchify products`);
+  }
+
+  // Resolve Hadeeya products from DB
+  let hadeeyaProducts: HadeeyaProduct[] = [];
+  if (selectedHadeeyaIds.length) {
+    const allHadeeya = getAllHadeeyaProducts();
+    hadeeyaProducts = allHadeeya.filter(p => selectedHadeeyaIds.includes(p.product_id));
+    log(`Resolved ${hadeeyaProducts.length} / ${selectedHadeeyaIds.length} Hadeeya products`);
+  }
+
+  if (!chunk.length && !hadeeyaProducts.length) {
+    throw new Error('No valid products found for the selected IDs');
+  }
+
+  for (const jid of groups) {
+    try {
+      log(`Sending intro to ${jid}`);
+      await safeSendMessage(jid, { text: "Assalamu Alaikum! Today's featured items:" }, { typing: false });
+
+      for (const p of chunk) {
+        const text = formatProduct(p);
+        if (p.image) {
+          const imgPath = await downloadImage(p.image, `k_${p.id}`);
+          if (imgPath) {
+            await safeSendMessage(jid, { image: { url: imgPath }, caption: text }, { typing: false });
+          } else {
+            await safeSendMessage(jid, { text }, { typing: false });
+          }
+        } else {
+          await safeSendMessage(jid, { text }, { typing: false });
+        }
+      }
+
+      for (const p of hadeeyaProducts) {
+        const text = `📌 *${p.name}*\n💰 Hadia: ₹${p.price_adjusted}\n📦 ${p.stock}`;
+        if (p.image_url) {
+          const imgPath = await downloadImage(p.image_url, `h_${p.product_id}`);
+          if (imgPath) {
+            await safeSendMessage(jid, { image: { url: imgPath }, caption: text }, { typing: false });
+          } else {
+            await safeSendMessage(jid, { text }, { typing: false });
+          }
+        } else {
+          await safeSendMessage(jid, { text }, { typing: false });
+        }
+      }
+
+      await safeSendMessage(jid, { text: "Reply to order or know more! JazakAllah." }, { typing: false });
+      log(`Completed sending to ${jid}`);
+    } catch (err) {
+      log(`Failed sending to ${jid}: ${err}`);
+      console.error(`[daily-poster] Failed sending to ${jid}`, err);
+    }
+  }
+  log('runDailyJobWithSelection() complete');
+}
+
 export async function getDailyPostPreview() {
   log('getDailyPostPreview() called');
   const state = loadState();

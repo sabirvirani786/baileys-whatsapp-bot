@@ -200,8 +200,6 @@ export async function connectToWhatsApp(
 }
 
 export function getSocket(): WASocket | null {
-  const has = !!sock;
-  log(`getSocket() called — returning ${has ? 'socket' : 'null'}`);
   return sock;
 }
 
@@ -214,9 +212,7 @@ export function getPairingCode(): string | null {
 }
 
 export function isWhatsAppConnected(): boolean {
-  const result = (isConnected && !!sock) || !!sock?.user;
-  log(`isWhatsAppConnected() = ${result} (isConnected=${isConnected}, hasSock=${!!sock}, hasUser=${!!sock?.user})`);
-  return result;
+  return (isConnected && !!sock) || !!sock?.user;
 }
 
 export async function logoutWhatsApp(): Promise<void> {

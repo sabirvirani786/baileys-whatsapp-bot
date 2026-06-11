@@ -4,7 +4,7 @@ import * as cheerio from 'cheerio';
 import { getCurrentQR, getSocket, logoutWhatsApp, reconnectWhatsApp, isWhatsAppConnected, getCachedContacts, refreshContactCache } from './connection.js';
 import { getConfig } from './config.js';
 import { fetchHadeeyaCategories, scrapeHadeeyaProductPage, getCombinedCategories } from './scraper.js';
-import { getDailyPostPreview } from './daily-poster.js';
+import { getDailyPostPreview, runDailyJobWithSelection } from './daily-poster.js';
 import { deleteHadeeyaProduct, clearHadeeyaProducts } from './db.js';
 import { handleIncomingMessages, sendCategoryProducts } from './message-handler.js';
 
@@ -65,6 +65,12 @@ app.get('/', (_req, res) => {
   .product-card { border: 1px solid #eee; border-radius: 8px; overflow: hidden; background: #fff; position: relative; }
   .product-card img { width: 100%; height: 160px; object-fit: cover; display: block; background: #f7f7f7; }
   .product-card .info { padding: 10px; white-space: pre-wrap; font-size: 12px; }
+  .product-card.selectable { cursor: pointer; transition: box-shadow 0.15s, opacity 0.15s; user-select: none; }
+  .product-card.selectable:hover { box-shadow: 0 0 0 2px #00a884; }
+  .product-card.selectable.selected { box-shadow: 0 0 0 3px #00a884; }
+  .product-card.selectable:not(.selected) { opacity: 0.55; }
+  .product-card .select-badge { position: absolute; top: 8px; left: 8px; width: 26px; height: 26px; border-radius: 50%; background: rgba(0,0,0,0.35); border: 2px solid rgba(255,255,255,0.7); display: flex; align-items: center; justify-content: center; color: white; font-size: 14px; font-weight: bold; transition: background 0.15s; }
+  .product-card.selected .select-badge { background: #00a884; border-color: #fff; }
   .post-section { margin-bottom: 24px; }
   .post-section h3 { margin-bottom: 10px; border-bottom: 2px solid #eee; padding-bottom: 5px; }
   .contact-list { max-height: 400px; overflow-y: auto; border: 1px solid #eee; border-radius: 4px; padding: 10px; }
@@ -140,6 +146,10 @@ app.get('/', (_req, res) => {
       <label>Category</label>
       <select id="s-cat"><option>Loading...</option></select>
     </div>
+    <div class="input-group">
+      <label>Custom Message (optional, sent before products)</label>
+      <textarea id="s-custom-msg" placeholder="e.g. Check out these amazing products!"></textarea>
+    </div>
     <div class="input-row">
       <button id="s-preview-btn" class="btn">Preview</button>
       <button id="s-send-btn" class="btn success" style="display:none;">Send to WhatsApp</button>
@@ -174,11 +184,14 @@ app.get('/', (_req, res) => {
 
     <div class="subpanel active" id="subpanel-daily">
       <div class="input-row">
-        <button id="t-load-daily" class="btn">Preview Daily Post</button>
-        <button id="t-post-daily" class="btn success">Post Now</button>
+        <button id="t-load-daily" class="btn">Load All Products</button>
+        <button id="t-post-daily" class="btn success" style="display:none;">⬆ Post Selected</button>
+        <button id="t-select-all" class="btn secondary" style="display:none;">Select All</button>
+        <button id="t-deselect-all" class="btn secondary" style="display:none;">Deselect All</button>
         <button id="t-scrape-daily" class="btn" style="background:#17a2b8;">Scrape Hadeeya</button>
         <button id="t-clear-hadeeya" class="btn danger">Clear Queue</button>
       </div>
+      <div id="t-selection-bar" style="display:none; padding:8px 0; font-size:13px; color:#555; margin-bottom:8px;"></div>
       <div id="t-daily-results"></div>
     </div>
 
@@ -297,10 +310,41 @@ document.getElementById('s-load-history').addEventListener('click', async () => 
 
 document.getElementById('s-load-groups').addEventListener('click', async () => {
   document.getElementById('s-groups-container').style.display = 'block';
-  const sel = document.getElementById('s-groups-list'); sel.innerHTML = '<option>Loading...</option>';
-  const j = await req('/api/groups');
-  if (j.success) { sel.innerHTML = ''; j.data.forEach(g => { const o = document.createElement('option'); o.value = g.id; o.text = g.subject+' ('+g.participants+' members)'; sel.appendChild(o); }); showMsg('sender-msg', 'success', 'Loaded '+j.data.length+' groups'); }
-  else showMsg('sender-msg', 'error', 'Failed to load groups');
+  const sel = document.getElementById('s-groups-list');
+  const btn = document.getElementById('s-load-groups');
+  sel.innerHTML = '<option>Loading groups...</option>';
+  btn.disabled = true;
+  btn.textContent = 'Loading...';
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 25000);
+  try {
+    let j;
+    try {
+      const r = await fetch('/api/groups', { signal: controller.signal });
+      j = await r.json();
+    } finally {
+      clearTimeout(timer);
+    }
+    if (j.success) {
+      sel.innerHTML = '';
+      if (!j.data.length) {
+        sel.innerHTML = '<option disabled>No groups found</option>';
+        showMsg('sender-msg', 'error', 'No groups found. Make sure WhatsApp is connected.');
+      } else {
+        j.data.forEach(g => { const o = document.createElement('option'); o.value = g.id; o.text = g.subject+' ('+g.participants+' members)'; sel.appendChild(o); });
+        showMsg('sender-msg', 'success', 'Loaded '+j.data.length+' groups');
+      }
+    } else {
+      sel.innerHTML = '<option disabled>Error</option>';
+      showMsg('sender-msg', 'error', j.error || 'Failed to load groups');
+    }
+  } catch (e) {
+    sel.innerHTML = '<option disabled>Error</option>';
+    showMsg('sender-msg', 'error', e.name === 'AbortError' ? 'Request timed out. Check WhatsApp connection.' : 'Failed to load groups');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Load Groups';
+  }
 });
 document.getElementById('s-group-search').addEventListener('keyup', () => {
   const f = document.getElementById('s-group-search').value.toLowerCase();
@@ -326,7 +370,12 @@ document.getElementById('s-preview-btn').addEventListener('click', async () => {
   showMsg('sender-msg', 'success', 'Loaded '+j.data.length+' products');
   document.getElementById('s-send-btn').style.display = 'inline-block';
   document.getElementById('s-preview-pane').style.display = 'block';
-  let html = '<div style="background:#e1f5fe; padding:8px 12px; border-radius:8px; align-self:flex-start; max-width:80%; font-size:13px;">🔍 '+j.data.length+' products</div>';
+  const customMsg = document.getElementById('s-custom-msg').value.trim();
+  let html = '';
+  if (customMsg) {
+    html += '<div style="background:#dcf8c6; padding:8px 12px; border-radius:8px; align-self:flex-end; max-width:80%; font-size:13px; box-shadow:0 1px 1px rgba(0,0,0,0.1);">' + customMsg.replace(/\\n/g, '<br>') + '</div>';
+  }
+  html += '<div style="background:#e1f5fe; padding:8px 12px; border-radius:8px; align-self:flex-start; max-width:80%; font-size:13px;">🔍 '+j.data.length+' products</div>';
   j.data.forEach(p => {
     html += '<div style="background:white; padding:4px; border-radius:8px; align-self:flex-start; max-width:85%; font-size:13px; box-shadow:0 1px 1px rgba(0,0,0,0.1);">';
     if (p.image) html += '<img src="'+p.image+'" style="width:100%; border-radius:6px; display:block; margin-bottom:5px;">';
@@ -342,7 +391,7 @@ document.getElementById('s-preview-btn').addEventListener('click', async () => {
 document.getElementById('s-send-btn').addEventListener('click', async () => {
   document.getElementById('s-send-btn').disabled = true;
   showMsg('sender-msg', 'loading', 'Sending...');
-  const j = await req('/api/send-category', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({number:sNumber.value.trim(),categoryName:sCat.value}) });
+  const j = await req('/api/send-category', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({number:sNumber.value.trim(),categoryName:sCat.value,customMessage:document.getElementById('s-custom-msg').value.trim()}) });
   if (j.success) { showMsg('sender-msg', 'success', j.message); document.getElementById('s-send-btn').style.display = 'none'; }
   else showMsg('sender-msg', 'error', j.error);
   document.getElementById('s-send-btn').disabled = false;
@@ -366,21 +415,136 @@ document.getElementById('c-fetch-btn').addEventListener('click', async () => {
   } else showMsg('contacts-msg', 'error', j.error);
 });
 
-// ==================== TAB: TEST ====================
-// Daily sub-tab
-document.getElementById('t-load-daily').addEventListener('click', async () => {
-  document.getElementById('t-daily-results').innerHTML = '<div class="msg loading">Loading...</div>';
-  const j = await req('/api/test/daily-post');
-  if (!j.success) return document.getElementById('t-daily-results').innerHTML = '<div class="msg error">'+j.error+'</div>';
-  let html = '';
-  if (j.data.chunk && j.data.chunk.length) { html += '<div class="post-section"><h3>Kharchify (5)</h3><div class="products-grid">'; j.data.chunk.forEach(p => { html += '<div class="product-card">'+(p.image?'<img src="'+p.image+'">':'')+'<div class="info">'+p.text+'</div></div>'; }); html += '</div></div>'; }
-  if (j.data.hadeeyaProducts && j.data.hadeeyaProducts.length) { html += '<div class="post-section"><h3>Hadeeya Queue</h3><div class="products-grid">'; j.data.hadeeyaProducts.forEach(p => { html += '<div class="product-card"><button class="btn danger" style="position:absolute;top:5px;right:5px;padding:2px 6px;font-size:11px;" onclick="deleteHadeeya('+p.id+')">X</button>'+(p.image?'<img src="'+p.image+'">':'')+'<div class="info">'+p.text+'</div></div>'; }); html += '</div></div>'; }
-  document.getElementById('t-daily-results').innerHTML = html || '<i>Nothing scheduled</i>';
+// ==================== TAB: TEST — Daily Poster ====================
+let _dailyPostData = null; // cache loaded products for posting
+
+function updateSelectionBar() {
+  const cards = document.querySelectorAll('#t-daily-results .product-card.selectable');
+  const selected = document.querySelectorAll('#t-daily-results .product-card.selectable.selected');
+  const bar = document.getElementById('t-selection-bar');
+  if (!cards.length) { bar.style.display = 'none'; return; }
+  bar.style.display = 'block';
+  bar.innerHTML = '<b>' + selected.length + ' / ' + cards.length + '</b> products selected for posting.';
+  const postBtn = document.getElementById('t-post-daily');
+  postBtn.style.display = selected.length ? 'inline-block' : 'none';
+  postBtn.textContent = '⬆ Post Selected (' + selected.length + ')';
+}
+
+document.getElementById('t-select-all').addEventListener('click', () => {
+  document.querySelectorAll('#t-daily-results .product-card.selectable').forEach(c => c.classList.add('selected'));
+  updateSelectionBar();
 });
-window.deleteHadeeya = async (id) => { await req('/api/test/hadeeya-delete', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({id}) }); document.getElementById('t-load-daily').click(); };
-document.getElementById('t-clear-hadeeya').addEventListener('click', async () => { if (confirm('Clear all queued Hadeeya?')) { await req('/api/test/hadeeya-delete', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({id:'all'}) }); document.getElementById('t-load-daily').click(); } });
-document.getElementById('t-scrape-daily').addEventListener('click', async () => { document.getElementById('t-daily-results').innerHTML = '<div class="msg loading">Scraping...</div>'; const j = await req('/api/test/scrape-hadeeya', {method:'POST'}); if (j.success) document.getElementById('t-load-daily').click(); else document.getElementById('t-daily-results').innerHTML = '<div class="msg error">'+j.error+'</div>'; });
-document.getElementById('t-post-daily').addEventListener('click', async () => { if (!confirm('Send daily post NOW?')) return; document.getElementById('t-daily-results').innerHTML = '<div class="msg loading">Sending...</div>'; const j = await req('/api/test/daily-post-now', {method:'POST'}); document.getElementById('t-daily-results').innerHTML = j.success ? '<div class="msg success">Sent!</div>' : '<div class="msg error">'+j.error+'</div>'; });
+document.getElementById('t-deselect-all').addEventListener('click', () => {
+  document.querySelectorAll('#t-daily-results .product-card.selectable').forEach(c => c.classList.remove('selected'));
+  updateSelectionBar();
+});
+
+document.getElementById('t-load-daily').addEventListener('click', async () => {
+  _dailyPostData = null;
+  document.getElementById('t-daily-results').innerHTML = '<div class="msg loading">Loading products...</div>';
+  document.getElementById('t-selection-bar').style.display = 'none';
+  document.getElementById('t-post-daily').style.display = 'none';
+  document.getElementById('t-select-all').style.display = 'none';
+  document.getElementById('t-deselect-all').style.display = 'none';
+
+  const j = await req('/api/test/daily-post');
+  if (!j.success) {
+    document.getElementById('t-daily-results').innerHTML = '<div class="msg error">'+j.error+'</div>';
+    return;
+  }
+  _dailyPostData = j.data;
+
+  let html = '';
+  const hasItems = (j.data.chunk && j.data.chunk.length) || (j.data.hadeeyaProducts && j.data.hadeeyaProducts.length);
+
+  if (j.data.chunk && j.data.chunk.length) {
+    html += '<div class="post-section"><h3>Kharchify Products (' + j.data.chunk.length + ') <span style="font-size:12px;font-weight:400;color:#888;">— click to select/deselect</span></h3><div class="products-grid">';
+    j.data.chunk.forEach(p => {
+      html += '<div class="product-card selectable selected" data-type="kharchify" data-id="'+p.id+'">'
+        + '<div class="select-badge">✓</div>'
+        + (p.image ? '<img src="'+p.image+'">' : '')
+        + '<div class="info">'+p.text+'</div>'
+        + '</div>';
+    });
+    html += '</div></div>';
+  }
+
+  if (j.data.hadeeyaProducts && j.data.hadeeyaProducts.length) {
+    html += '<div class="post-section"><h3>Hadeeya Queue (' + j.data.hadeeyaProducts.length + ')</h3><div class="products-grid">';
+    j.data.hadeeyaProducts.forEach(p => {
+      html += '<div class="product-card selectable selected" data-type="hadeeya" data-id="'+p.id+'">'
+        + '<div class="select-badge">✓</div>'
+        + '<button class="btn danger" style="position:absolute;top:8px;right:8px;padding:2px 7px;font-size:11px;z-index:10;" onclick="event.stopPropagation();deleteHadeeya('+p.id+')">✕</button>'
+        + (p.image ? '<img src="'+p.image+'">' : '')
+        + '<div class="info">'+p.text+'</div>'
+        + '</div>';
+    });
+    html += '</div></div>';
+  }
+
+  document.getElementById('t-daily-results').innerHTML = html || '<i style="color:#888;">No products found. Try scraping Hadeeya first.</i>';
+
+  if (hasItems) {
+    // Attach click-to-toggle on each card
+    document.querySelectorAll('#t-daily-results .product-card.selectable').forEach(card => {
+      card.addEventListener('click', () => {
+        card.classList.toggle('selected');
+        updateSelectionBar();
+      });
+    });
+    document.getElementById('t-select-all').style.display = 'inline-block';
+    document.getElementById('t-deselect-all').style.display = 'inline-block';
+    updateSelectionBar();
+  }
+});
+
+document.getElementById('t-post-daily').addEventListener('click', async () => {
+  const selectedCards = Array.from(document.querySelectorAll('#t-daily-results .product-card.selectable.selected'));
+  if (!selectedCards.length) return showMsg('test-msg', 'error', 'No products selected.');
+
+  const kharchifyIds = selectedCards.filter(c => c.dataset.type === 'kharchify').map(c => c.dataset.id);
+  const hadeeyaIds = selectedCards.filter(c => c.dataset.type === 'hadeeya').map(c => Number(c.dataset.id));
+
+  if (!confirm('Post ' + selectedCards.length + ' selected product(s) to all configured groups now?')) return;
+
+  const postBtn = document.getElementById('t-post-daily');
+  postBtn.disabled = true;
+  showMsg('test-msg', 'loading', 'Sending ' + selectedCards.length + ' product(s)...');
+
+  const j = await req('/api/test/daily-post-selected', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ kharchifyIds, hadeeyaIds })
+  });
+
+  if (j.success) {
+    showMsg('test-msg', 'success', j.message);
+  } else {
+    showMsg('test-msg', 'error', j.error);
+  }
+  postBtn.disabled = false;
+});
+
+window.deleteHadeeya = async (id) => {
+  await req('/api/test/hadeeya-delete', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({id}) });
+  document.getElementById('t-load-daily').click();
+};
+document.getElementById('t-clear-hadeeya').addEventListener('click', async () => {
+  if (confirm('Clear all queued Hadeeya products?')) {
+    await req('/api/test/hadeeya-delete', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({id:'all'}) });
+    document.getElementById('t-load-daily').click();
+  }
+});
+document.getElementById('t-scrape-daily').addEventListener('click', async () => {
+  document.getElementById('t-daily-results').innerHTML = '<div class="msg loading">Scraping Hadeeya... this may take a minute.</div>';
+  document.getElementById('t-selection-bar').style.display = 'none';
+  document.getElementById('t-post-daily').style.display = 'none';
+  document.getElementById('t-select-all').style.display = 'none';
+  document.getElementById('t-deselect-all').style.display = 'none';
+  const j = await req('/api/test/scrape-hadeeya', {method:'POST'});
+  if (j.success) document.getElementById('t-load-daily').click();
+  else document.getElementById('t-daily-results').innerHTML = '<div class="msg error">'+j.error+'</div>';
+});
 
 // Scraper sub-tab
 const tScraperCat = document.getElementById('t-scraper-cat');
@@ -543,7 +707,7 @@ app.post('/api/test/chatbot-incoming', async (req, res) => {
 
 app.post('/api/send-category', async (req, res) => {
   try {
-    const { number, categoryName } = req.body;
+    const { number, categoryName, customMessage } = req.body;
     if (!number || !categoryName) return res.status(400).json({ success: false, error: 'Missing number or categoryName' });
 
     const cats = await getCombinedCategories();
@@ -561,7 +725,7 @@ app.post('/api/send-category', async (req, res) => {
       if (!jid.includes('@g.us') && !jid.includes('@s.whatsapp.net')) {
         jid = `${jid.replace(/\D/g, '')}@s.whatsapp.net`;
       }
-      const success = await sendCategoryProducts(jid, selectedCat);
+      const success = await sendCategoryProducts(jid, selectedCat, customMessage);
       if (success) successCount++;
       // small delay to prevent rate limit
       await new Promise(r => setTimeout(r, 500));
@@ -624,15 +788,37 @@ app.get('/api/groups', async (_req, res) => {
   try {
     const sock = getSocket();
     if (!sock || !sock.user) {
-      return res.status(400).json({ success: false, error: 'Bot is not connected' });
+      return res.status(400).json({ success: false, error: 'Bot is not connected. Please scan the QR code first.' });
     }
-    const groups = await sock.groupFetchAllParticipating();
+    const TIMEOUT_MS = 20000;
+    const groups = await Promise.race([
+      sock.groupFetchAllParticipating(),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('Fetching groups timed out after 20s. Check WhatsApp connection.')), TIMEOUT_MS)
+      ),
+    ]);
     const groupList = Object.values(groups).map((g: any) => ({
       id: g.id,
-      subject: g.subject,
-      participants: g.participants?.length || 0
+      subject: g.subject || g.id || 'Unknown Group',
+      participants: g.participants?.length || 0,
     }));
     res.json({ success: true, data: groupList });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.post('/api/test/daily-post-selected', async (req, res) => {
+  try {
+    const { kharchifyIds = [], hadeeyaIds = [] } = req.body;
+    if (!kharchifyIds.length && !hadeeyaIds.length) {
+      return res.status(400).json({ success: false, error: 'No products selected' });
+    }
+    await runDailyJobWithSelection(
+      kharchifyIds.map(String),
+      hadeeyaIds.map(Number)
+    );
+    res.json({ success: true, message: `Posted ${kharchifyIds.length + hadeeyaIds.length} product(s) to all configured groups.` });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
   }
@@ -753,6 +939,11 @@ app.get('/sender', (_req, res) => {
       </select>
     </div>
     
+    <div class="input-group">
+      <label>Custom Message (optional, sent before products)</label>
+      <textarea id="custom-msg" placeholder="e.g. Check out these amazing products!" style="width:100%; padding:10px; border:1px solid #ccc; border-radius:4px; font-size:14px; height:80px; resize:vertical;"></textarea>
+    </div>
+    
     <button id="preview-btn" class="btn">Generate Preview</button>
     <button id="send-btn" class="btn" style="display:none; background: #25d366; color: #075e54;">Send to WhatsApp</button>
   </div>
@@ -810,22 +1001,42 @@ const addGroupsBtn = document.getElementById('add-groups-btn');
 loadGroupsBtn.addEventListener('click', async () => {
   try {
     groupsContainer.style.display = 'block';
-    groupsList.innerHTML = '<option>Loading...</option>';
-    const j = await req('/api/groups');
+    groupsList.innerHTML = '<option>Loading groups...</option>';
+    loadGroupsBtn.disabled = true;
+    loadGroupsBtn.textContent = 'Loading...';
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 25000);
+    let j;
+    try {
+      const r = await fetch('/api/groups', { signal: controller.signal });
+      j = await r.json();
+    } finally {
+      clearTimeout(timer);
+    }
     if (j.success) {
       groupsList.innerHTML = '';
-      j.data.forEach(g => {
-        const opt = document.createElement('option');
-        opt.value = g.id;
-        opt.text = g.subject + ' (' + g.participants + ' members)';
-        groupsList.appendChild(opt);
-      });
-      showMsg('success', 'Loaded ' + j.data.length + ' groups.');
+      if (!j.data.length) {
+        groupsList.innerHTML = '<option disabled>No groups found</option>';
+        showMsg('error', 'No groups found. Make sure WhatsApp is connected.');
+      } else {
+        j.data.forEach(g => {
+          const opt = document.createElement('option');
+          opt.value = g.id;
+          opt.text = g.subject + ' (' + g.participants + ' members)';
+          groupsList.appendChild(opt);
+        });
+        showMsg('success', 'Loaded ' + j.data.length + ' groups.');
+      }
     } else {
+      groupsList.innerHTML = '<option disabled>Error loading groups</option>';
       showMsg('error', j.error || 'Failed to load groups');
     }
   } catch (e) {
-    showMsg('error', 'Failed to load groups.');
+    groupsList.innerHTML = '<option disabled>Error</option>';
+    showMsg('error', e.name === 'AbortError' ? 'Request timed out. Check WhatsApp connection.' : 'Failed to load groups: ' + e.message);
+  } finally {
+    loadGroupsBtn.disabled = false;
+    loadGroupsBtn.textContent = 'Load Groups';
   }
 });
 
@@ -882,7 +1093,12 @@ previewBtn.addEventListener('click', async () => {
     statusMsg.style.display = 'none';
     sendBtn.style.display = 'block';
     
-    let bubblesHtml = '<div style="background: #e1f5fe; padding: 8px 12px; border-radius: 8px; align-self: flex-start; max-width: 80%; font-size: 14px; box-shadow: 0 1px 1px rgba(0,0,0,0.1);">🔍 Loaded ' + j.data.length + ' products for *' + catName + '*!</div>';
+    const customMsg = document.getElementById('custom-msg').value.trim();
+    let bubblesHtml = '';
+    if (customMsg) {
+      bubblesHtml += '<div style="background: #dcf8c6; padding: 8px 12px; border-radius: 8px; align-self: flex-end; max-width: 80%; font-size: 14px; box-shadow: 0 1px 1px rgba(0,0,0,0.1);">' + customMsg.replace(/\\n/g, '<br>') + '</div>';
+    }
+    bubblesHtml += '<div style="background: #e1f5fe; padding: 8px 12px; border-radius: 8px; align-self: flex-start; max-width: 80%; font-size: 14px; box-shadow: 0 1px 1px rgba(0,0,0,0.1);">🔍 Loaded ' + j.data.length + ' products for *' + catName + '*!</div>';
     
     j.data.forEach(p => {
       bubblesHtml += '<div style="background: white; padding: 4px; border-radius: 8px; align-self: flex-start; max-width: 85%; font-size: 14px; box-shadow: 0 1px 1px rgba(0,0,0,0.1);">';
@@ -917,7 +1133,7 @@ sendBtn.addEventListener('click', async () => {
     const res = await fetch('/api/send-category', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ number: num, categoryName: catName })
+      body: JSON.stringify({ number: num, categoryName: catName, customMessage: document.getElementById('custom-msg').value.trim() })
     });
     const j = await res.json();
     if (j.success) {
@@ -1028,6 +1244,9 @@ app.get('/dashboard', (_req, res) => {
     <div class="input-row">
       <input type="text" id="ds-num" placeholder="Phone Number (e.g. 919876543210)">
       <select id="ds-cat"><option value="">Loading categories...</option></select>
+    </div>
+    <div class="input-row">
+      <textarea id="ds-custom-msg" placeholder="Custom Message (optional, sent before products)" style="flex:1; min-width:200px; padding:10px; border:1px solid #ccc; border-radius:4px; font-size:14px; height:42px; resize:vertical;"></textarea>
     </div>
     <div class="input-row">
       <button id="ds-preview-btn">Preview</button>
@@ -1225,7 +1444,12 @@ document.getElementById('ds-preview-btn').addEventListener('click', async () => 
   dsWhatsappPreview.style.display = 'block';
   dsSendBtn.style.display = 'inline-block';
   
-  let bubblesHtml = '<div style="background: #e1f5fe; padding: 8px 12px; border-radius: 8px; align-self: flex-start; max-width: 80%; font-size: 14px;">🔍 Loaded ' + j.data.length + ' products for *' + catName + '*!</div>';
+  const customMsg = document.getElementById('ds-custom-msg').value.trim();
+  let bubblesHtml = '';
+  if (customMsg) {
+    bubblesHtml += '<div style="background: #dcf8c6; padding: 8px 12px; border-radius: 8px; align-self: flex-end; max-width: 80%; font-size: 14px; box-shadow: 0 1px 1px rgba(0,0,0,0.1);">' + customMsg.replace(/\\n/g, '<br>') + '</div>';
+  }
+  bubblesHtml += '<div style="background: #e1f5fe; padding: 8px 12px; border-radius: 8px; align-self: flex-start; max-width: 80%; font-size: 14px;">🔍 Loaded ' + j.data.length + ' products for *' + catName + '*!</div>';
   
   j.data.forEach(p => {
     bubblesHtml += '<div style="background: white; padding: 4px; border-radius: 8px; align-self: flex-start; max-width: 85%; font-size: 14px; box-shadow: 0 1px 1px rgba(0,0,0,0.1);">';
@@ -1257,7 +1481,7 @@ dsSendBtn.addEventListener('click', async () => {
     const res = await fetch('/api/send-category', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ number: num, categoryName: catName })
+      body: JSON.stringify({ number: num, categoryName: catName, customMessage: document.getElementById('ds-custom-msg').value.trim() })
     });
     const j = await res.json();
     if (j.success) {

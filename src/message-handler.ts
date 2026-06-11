@@ -27,8 +27,11 @@ function isDuplicate(msgId: string): boolean {
   return false;
 }
 
-export async function sendCategoryProducts(jid: string, selectedCat: any) {
+export async function sendCategoryProducts(jid: string, selectedCat: any, customMessage?: string) {
   log(`sendCategoryProducts() called — jid=${jid}, category="${selectedCat.name}"`);
+  if (customMessage) {
+    await safeSendMessage(jid, { text: customMessage }, { typing: false });
+  }
   await safeSendMessage(jid, { text: `🔍 Loading products for *${selectedCat.name}*...` }, { typing: false });
 
   let products;
